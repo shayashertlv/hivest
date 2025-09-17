@@ -1,0 +1,210 @@
+"""hivest/shared/news.py"""
+"""
+Ollama-based position brief helpers.
+Generates concise, headline-like briefs per holding using local Ollama, with inputs:
+- stock ticker (symbol)
+- percentage of the portfolio (weight fraction 0..1)
+- average buying price (avg_buy_price)
+- when the stock was bought (bought_at, optional YYYY-MM-DD)
+
+Returns items shaped like {source, title, url, publishedAt} for compatibility.
+If Ollama isn't available, returns an empty list.
+"""
+from typing import List, Dict, Optional, Union
+from datetime import datetime
+import os
+import requests
+from typing import Iterable
+from .llm_client import make_llm
+
+SymbolLike = Union[str, List[str], None]
+
+
+def _flatten(items: SymbolLike) -> List[str]:
+    if items is None:
+        return []
+    if isinstance(items, str):
+        return [items]
+    return [s for s in items if isinstance(s, str)]
+
+def _norm_syms(symbols: Iterable[str]) -> list[str]:
+    return [str(s).upper().strip() for s in (symbols or []) if str(s).strip()]
+
+def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
+    """
+    Try GNews (https://gnews.io) then MediaStack (https://mediastack.com) using env keys.
+    Falls back to [] if neither is configured or reachable.
+
+    Output shape: [{source, title, url, publishedAt, symbol}]
+    """
+    syms = _norm_syms(symbols)
+    if not syms:
+        return []
+
+    out: list[dict] = []
+    gnews_key = os.getenv("GNEWS_FREE_API_KEY", "").strip()
+    mediastack_key = os.getenv("MEDIASTACK_FREE_API_KEY", "").strip()
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": "hivest-news/1.0"})
+
+    # ---- 1) GNews (simple query per symbol)
+    if gnews_key:
+        for sym in syms:
+            try:
+                r = session.get(
+                    "https://gnews.io/api/v4/search",
+                    params={"q": sym, "token": gnews_key, "lang": "en", "max": min(5, limit)},
+                    timeout=7,
+                )
+                if r.ok:
+                    for a in (r.json().get("articles") or [])[:limit]:
+                        out.append({
+                            "source": (a.get("source") or {}).get("name") or "GNews",
+                            "title": a.get("title") or "",
+                            "url": a.get("url") or "",
+                            "publishedAt": a.get("publishedAt") or "",
+                            "symbol": sym,
+                        })
+            except Exception:
+                pass
+        if out:
+            return out[:limit]
+
+    # ---- 2) MediaStack
+    if mediastack_key:
+        for sym in syms:
+            try:
+                r = session.get(
+                    "https://api.mediastack.com/v1/news",
+                    params={"access_key": mediastack_key, "languages": "en", "keywords": sym, "limit": min(5, limit)},
+                    timeout=7,
+                )
+                if r.ok:
+                    for a in (r.json().get("data") or [])[:limit]:
+                        out.append({
+                            "source": a.get("source") or "MediaStack",
+                            "title": a.get("title") or "",
+                            "url": a.get("url") or "",
+                            "publishedAt": a.get("published_at") or "",
+                            "symbol": sym,
+                        })
+            except Exception:
+                pass
+        if out:
+            return out[:limit]
+
+    # Nothing configured / reachable
+    return []
+
+def get_news_for_holdings(holdings: list[dict], limit: int = 10) -> list[dict]:
+    """
+    Preferred entry point:
+    1) Try web news (GNews/MediaStack) for the portfolio symbols.
+    2) If none available, fallback to local Ollama-based one-liners via build_position_brief().
+
+    When trimming to `limit`, interleave items by symbol (round-robin) to avoid
+    one ticker dominating when the limit is small.
+    """
+    syms = [str(h.get("symbol", "")).upper() for h in (holdings or []) if h.get("symbol")]
+    api_items = fetch_news_api(syms, limit=limit)
+    if api_items:
+        try:
+            # Round-robin by symbol
+            buckets: dict[str, list[dict]] = {}
+            order: list[str] = []
+            for it in api_items:
+                sym = (it.get('symbol') or '').upper()
+                if sym not in buckets:
+                    buckets[sym] = []
+                    order.append(sym)
+                buckets[sym].append(it)
+            out: list[dict] = []
+            # Iterate buckets in order repeatedly until limit reached
+            while len(out) < limit and buckets:
+                progressed = False
+                for sym in list(order):
+                    q = buckets.get(sym, [])
+                    if q:
+                        out.append(q.pop(0))
+                        progressed = True
+                        if len(out) >= limit:
+                            break
+                    if not q:
+                        # remove empty bucket from cycle
+                        buckets.pop(sym, None)
+                        order = [s for s in order if s in buckets]
+                if not progressed:
+                    break
+            return out
+        except Exception:
+            return api_items[:limit]
+    return build_position_brief(holdings, limit=limit) or []
+
+def build_position_brief(holdings: List[Dict], limit: int = 10) -> List[Dict]:
+    """
+    Build short, headline-like briefs for the provided holdings using Ollama.
+    holdings: list of dicts with keys: symbol, weight, avg_buy_price, bought_at (optional)
+    """
+    llm = make_llm()
+    if not callable(llm):
+        print("[news] Ollama unavailable -> returning empty briefs.")
+        return []
+    else:
+        print("[news] Using Ollama to draft position briefs.")
+
+    now = datetime.now().strftime("%Y-%m-%d")
+    lines = []
+    for h in holdings or []:
+        sym = str(h.get("symbol", "")).upper()
+        if not sym:
+            continue
+        w = float(h.get("weight") or 0.0)
+        abp = h.get("avg_buy_price")
+        bat = h.get("bought_at") or "unknown date"
+        lines.append(f"- {sym}: weight={w:.2%}; avg_buy_price={abp if abp is not None else 'n/a'}; bought_at={bat}")
+
+    if not lines:
+        return []
+
+    prompt = (
+        "You are a cautious financial assistant. Based ONLY on the provided positions, "
+        "produce up to {limit} concise, single-line briefs (no numbering) that a holder should monitor. "
+        "Avoid making up facts or targets; keep generic and risk-aware. Each line should start with the ticker.\n\n"
+        "Positions:\n{positions}\n\n"
+        "Output: a list of short headline-like lines, one per consideration."
+    ).format(limit=limit, positions="\n".join(lines))
+
+    text = (llm(prompt) or "").strip()
+    # Split into lines and sanitize
+    out: List[Dict] = []
+    for ln in (text.splitlines() if text else []):
+        s = ln.strip("- •* \t")
+        if not s:
+            continue
+        # extract leading ticker token if present (e.g., "AAPL: ...", "MSFT — ...")
+        lead = s.split(":", 1)[0].split("—", 1)[0].split("-", 1)[0].strip().split()[0]
+        sym_guess = "".join(ch for ch in lead if ch.isalnum()).upper()
+        item = {
+            "source": "ollama",
+            "title": s,
+            "url": "",
+            "publishedAt": now,
+            "symbol": sym_guess if sym_guess else "",
+        }
+        out.append(item)
+        if len(out) >= limit:
+            break
+
+    return out
+
+
+def get_briefs_for_symbols(symbols: SymbolLike = None, sectors: SymbolLike = None, limit: int = 10) -> List[Dict]:
+    """
+    Compatibility helper: if symbols provided, generate generic briefs with Ollama.
+    """
+    syms = _flatten(symbols)
+    if not syms:
+        return []
+    holdings = [{"symbol": s, "weight": 0.0, "avg_buy_price": None, "bought_at": None} for s in syms]
+    return build_position_brief(holdings, limit=limit)
