@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional
+from typing import List, Optional
 from .models import StockInput, StockOptions, StockMetrics, StockReport
 from .indicators import compute_rsi, sma, pct_from_window_extrema
 from ...shared.market import fetch_yahoo_chart, compute_simple_returns, infer_yahoo_range, align_by_dates
@@ -51,19 +51,63 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
 
     prompt = build_stock_prompt(si.symbol, si.timeframe_label, metrics)
     llm = make_llm(opt.llm_model, opt.llm_host)
-    narrative = (llm(prompt) or "").strip() if callable(llm) else _fallback(metrics)
+    narrative = (llm(prompt) or "").strip() if callable(llm) else _fallback(si.symbol, si.timeframe_label, metrics)
     return StockReport(metrics=metrics, narrative=narrative)
 
 
-def _fallback(m: StockMetrics) -> str:
-    parts = []
-    parts.append(f"Return {m.cum_return*100:.2f}% with vol {m.volatility*100:.2f}% and beta {m.beta_vs_spy:.2f}.")
-    parts.append(f"RSI {m.rsi14:.1f}; price {m.pct_from_52w_high*100:.2f}% off 52w high.")
-    if m.fundamentals:
-        pe = m.fundamentals.get("pe_ttm"); mc = m.fundamentals.get("market_cap")
-        f = []
-        if pe is not None: f.append(f"P/E≈{pe:.1f}")
-        if mc is not None: f.append(f"mkt cap≈{mc/1e9:.1f}B")
-        if f: parts.append("Valuation: " + ", ".join(f) + ".")
-    if m.next_earnings: parts.append(f"Next earnings on {m.next_earnings}.")
-    return " ".join(parts)
+def _fallback(symbol: str, tf_label: str, m: StockMetrics) -> str:
+    """Deterministic structured summary mirroring the LLM format."""
+
+    snapshot_lines = []
+    snapshot_lines.append(
+        f"{symbol.upper()} → {tf_label} return {m.cum_return*100:.1f}% with beta {m.beta_vs_spy:.2f} and vol {m.volatility*100:.1f}%."
+    )
+    snapshot_lines.append(
+        f"Momentum check: RSI {m.rsi14:.1f}; trading {m.pct_from_52w_high*100:.1f}% from 52w high / {m.pct_from_52w_low*100:.1f}% from low."
+    )
+
+    advantages = []
+    if m.cum_return >= 0:
+        advantages.append(f"Positive YTD performance {m.cum_return*100:.1f}% with controlled drawdown {m.max_drawdown*100:.1f}%.")
+    else:
+        advantages.append(f"Underperformance {m.cum_return*100:.1f}% creates potential mean-reversion if catalysts land.")
+    if m.fundamentals.get("pe_ttm"):
+        advantages.append(f"Valuation marker: P/E ≈{m.fundamentals['pe_ttm']:.1f} with market cap ≈{(m.fundamentals.get('market_cap', 0)/1e9):.1f}B.")
+    if m.news_items:
+        advantages.append(f"Recent focus: {m.news_items[0].get('title','headline')} ({m.news_items[0].get('source','')}).")
+
+    risks = []
+    if m.beta_vs_spy > 1.1:
+        risks.append(f"High beta {m.beta_vs_spy:.2f} could amplify drawdowns.")
+    if m.max_drawdown < -0.2:
+        risks.append(f"History of deep pullbacks (max drawdown {m.max_drawdown*100:.1f}%).")
+    risks.append(f"RSI {m.rsi14:.1f} signals {'overbought' if m.rsi14 > 70 else 'neutral' if 30 <= m.rsi14 <= 70 else 'oversold'} zone.")
+
+    outlook = []
+    outlook.append("Monitor AI/data demand, revenue growth cadence, and margin progression for direction.")
+    if m.next_earnings:
+        outlook.append(f"Next earnings checkpoint: {m.next_earnings} (watch guidance and bookings).")
+    outlook.append("Track capex plans and supply chain updates for clues on capacity scaling.")
+
+    conclusions = []
+    conclusions.append("Base case: hold/add on weakness if execution stays on track.")
+    conclusions.append(f"Valuation watch: {('premium multiple' if m.fundamentals.get('pe_ttm', 0) > 25 else 'reasonable multiple')} vs growth outlook.")
+
+    bottom_line = (
+        "💡 Bottom line: Focus on execution vs. capex ambitions and demand conversion over the next year to gauge upside vs. volat"
+        "ility."
+    )
+
+    return (
+        "📊 Company Snapshot\n"
+        + "\n".join(snapshot_lines)
+        + "\n\n⚖️ Key Advantages\n"
+        + "\n".join(f"- {ln}" for ln in advantages)
+        + "\n\n⚠️ Risks to Watch\n"
+        + "\n".join(f"- {ln}" for ln in risks)
+        + "\n\n🔮 12–18-Month Outlook (what could drive upside/downside)\n"
+        + "\n".join(f"- {ln}" for ln in outlook)
+        + "\n\n📝 Conclusions & Recommendations\n"
+        + "\n".join(f"- {ln}" for ln in conclusions)
+        + f"\n\n{bottom_line}"
+    )

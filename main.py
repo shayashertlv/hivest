@@ -40,7 +40,7 @@ def run_example() -> str:
 
     pi = PortfolioInput(
         holdings=holdings,
-        timeframe_label="all time",
+        timeframe_label="YTD",
         portfolio_returns=portfolio_returns,
         benchmark_returns=benchmark_returns,
         market_returns=benchmark_returns.get("SPY"),
@@ -54,16 +54,18 @@ def run_example() -> str:
     return analyze_portfolio(pi, options)
 
 
-def run_from_user_input(positions, timeframe="6m", model: str | None = None, host: str | None = None):
+def run_from_user_input(positions, timeframe="YTD", model: str | None = None, host: str | None = None):
     """
-    positions: list of dicts with either {symbol, weight_pct, avg_buy_price?, bought_at?}
-               or {symbol, weight (0..1), avg_buy_price?, bought_at?}
-    timeframe: e.g. '1m', '3m', '6m', '1y', 'ytd', or 'last 6 months'
+    positions: list of dicts describing the portfolio. Supported keys per entry:
+        {symbol, cut?, weight?, weight_pct?, avg_buy_price?, bought_at?, sector?, name?}
+        "cut" represents the portfolio slice (0..1). Weight/weight_pct remain supported for
+        backward compatibility.
+    timeframe: ignored — the analysis is always executed on a Year-to-Date window.
     """
     holdings: List[Holding] = holdings_from_user_positions(positions)
     pi = PortfolioInput(
         holdings=holdings,
-        timeframe_label=timeframe,
+        timeframe_label="YTD",
         # Leave series empty; auto_fill_series will populate from Yahoo
         portfolio_returns=[],
         benchmark_returns={},

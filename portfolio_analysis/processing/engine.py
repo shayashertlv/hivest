@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 import traceback
 
 from .models import Holding, PortfolioInput, AnalysisOptions, ComputedMetrics
@@ -11,18 +12,37 @@ from ...shared.news import get_news_for_holdings
 from ...shared.llm_client import make_llm
 
 
+def _ytd_bounds() -> Tuple[str, str]:
+    """Return (start_date, end_date) strings for the current year-to-date window."""
+
+    now = datetime.now()
+    start = datetime(now.year, 1, 1)
+    return start.strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d")
+
+
 def holdings_from_user_positions(positions: List[Dict[str, Any]]) -> List[Holding]:
-    """
-    Accepts items like:
-      {"symbol": "AAPL", "weight_pct": 25.0, "avg_buy_price": 180.0, "bought_at": "2024-10-15"}
-    Or:
-      {"symbol": "AAPL", "weight": 0.25, "avg_buy_price": 180.0}
-    Returns a list[Holding] with normalized fractional weights.
+    """Normalize user provided position data.
+
+    The helper now accepts a simplified schema focused on symbol and the
+    position's "cut" (share of the portfolio). Supported keys per item:
+
+    * ``symbol`` – required ticker string (case-insensitive).
+    * ``cut`` – fractional weight (0..1). When provided alongside ``weight``
+      or ``weight_pct`` the explicit ``cut`` wins.
+    * ``weight`` – legacy fractional weight (0..1).
+    * ``weight_pct`` – legacy percentage weight (0..100).
+    * Optional metadata such as ``avg_buy_price``, ``bought_at``, ``sector``,
+      and ``name`` are preserved when present.
+
+    The returned list contains :class:`Holding` objects with weights
+    re-normalised so that positive cuts sum to one.
     """
     hs: List[Holding] = []
     raw_weights: List[float] = []
     for p in positions or []:
-        if "weight" in p and p["weight"] is not None:
+        if p.get("cut") is not None:
+            raw_weights.append(float(p.get("cut", 0.0)))
+        elif "weight" in p and p["weight"] is not None:
             raw_weights.append(float(p["weight"]))
         else:
             raw_weights.append(float(p.get("weight_pct", 0.0)) / 100.0)
@@ -47,11 +67,19 @@ def analyze_portfolio(pi: PortfolioInput, options: Optional[AnalysisOptions] = N
     # Local logger toggle
     LOG = print if getattr(options, "verbose", False) else (lambda *a, **k: None)
 
+    # Force the analysis window to the current year-to-date span.
+    ytd_start, ytd_end = _ytd_bounds()
+    setattr(pi, "analysis_start", ytd_start)
+    setattr(pi, "analysis_end", ytd_end)
+    # `timeframe_label` controls downstream Yahoo fetches; keep it simple.
+    pi.timeframe_label = "YTD"
+    setattr(pi, "timeframe_display", f"YTD ({ytd_start} → {ytd_end})")
+
     # Inputs echo
     if getattr(options, "echo_tools", True):
         try:
             LOG("[inputs] symbols=", [h.symbol for h in (pi.holdings or [])])
-            LOG(f"[inputs] timeframe='{pi.timeframe_label}'")
+            LOG(f"[inputs] timeframe='YTD ({ytd_start} -> {ytd_end})'")
             LOG("[inputs] weights(fractions)=", {h.symbol: float(h.weight or 0.0) for h in (pi.holdings or [])})
             if any(getattr(h, "avg_buy_price", None) is not None for h in (pi.holdings or [])):
                 LOG("[inputs] avg_buy_price provided for:", [h.symbol for h in pi.holdings if getattr(h, "avg_buy_price", None) is not None])

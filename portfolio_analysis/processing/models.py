@@ -18,7 +18,7 @@ class PortfolioInput:
     holdings: List[Holding]
 
     # Time horizon and cadence
-    timeframe_label: str = "all time"  # e.g., "YTD", "1y", "3m", or "all time"
+    timeframe_label: str = "YTD"  # Always analysed on a YTD window
     periods_per_year: float = 252.0     # daily default
 
     # Performance series (same periodicity)

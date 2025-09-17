@@ -1,8 +1,14 @@
-import os, requests, datetime as _dt
+"""Lightweight fundamentals fetch helpers."""
+
+import os
 from typing import Dict
 
+import requests
 
-def _session():
+
+def _session() -> requests.Session:
+    """Return a preconfigured requests session."""
+
     s = requests.Session()
     s.headers.update({"User-Agent": "hivest-shared/1.0"})
     return s

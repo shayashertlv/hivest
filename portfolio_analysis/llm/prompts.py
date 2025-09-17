@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..processing.models import PortfolioInput, ComputedMetrics, Holding
 from ...shared.performance import cumulative_return
@@ -118,179 +118,176 @@ def score_portfolio(cm: "ComputedMetrics") -> Dict[str, str | float | int]:
 
 
 def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: Optional[List[Dict]] = None) -> str:
-    symbols, sectors, weights = _holdings_to_maps(pi.holdings)
+    _, _, weights = _holdings_to_maps(pi.holdings)
     ppy = float(getattr(pi, "periods_per_year", 252.0)) or 252.0
     insights = derive_insights(cm, ppy=ppy)
     score_info = score_portfolio(cm)
 
-    flags_line = " ".join(insights.get("flags", [])) or "none"
-    pre_actions = ", ".join(insights.get("actions", [])) or "none"
     dt_now = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    port_perf_s = f"Portfolio: {FMT_PCT(cm.cum_return)}"
-    spy_perf_s = f"SPY: {FMT_PCT(cm.benchmarks.get('SPY', {}).get('cum_return', 0.0))}" if 'SPY' in cm.benchmarks else ""
-    qqq_perf_s = f"QQQ: {FMT_PCT(cm.benchmarks.get('QQQ', {}).get('cum_return', 0.0))}" if 'QQQ' in cm.benchmarks else ""
-    comparison_summary_line = ", ".join(filter(None, [port_perf_s, spy_perf_s, qqq_perf_s]))
-
-    # Positions block (exact facts only)
-    pos_lines = []
-    for h in (pi.holdings or []):
-        sym = (h.symbol or "").upper()
-        w = weights.get(sym, float(h.weight or 0.0))
-        abp = h.avg_buy_price
-        bat = h.bought_at or "unknown"
-        pos_lines.append(f"- {sym}: weight={w:.2%}; avg_buy_price={abp if abp is not None else 'n/a'}; bought_at={bat}")
-    positions_block = "\n".join(pos_lines) or "n/a"
-
-    winners_s = _fmt_top_list(cm.winners, 3) or "n/a"
-    losers_s  = _fmt_top_list(cm.losers, 3) or "n/a"
+    window_display = getattr(pi, "timeframe_display", pi.timeframe_label)
+    analysis_window = f"{getattr(pi, 'analysis_start', 'unknown')} to {getattr(pi, 'analysis_end', 'unknown')}"
 
     sym_cum = _per_symbol_cum_map(pi)
-    stock_perf_block = ", ".join(f"{s}: {FMT_PCT(v)}" for s, v in sorted(sym_cum.items())) or "n/a"
+    contrib_map = {sym: val for sym, val in (cm.by_symbol or [])}
 
-    # Identify top-2 by weight and surface their cumulative returns explicitly
-    h_by_w = sorted(((h.symbol.upper(), float(getattr(h, "weight", 0.0))) for h in (pi.holdings or [])), key=lambda t: t[1], reverse=True)
-    from_syms = [s for s, _ in h_by_w[:2]]
-    top2_s = ", ".join(f"{s}: {FMT_PCT(sym_cum.get(s, 0.0))}" for s in from_syms) or "n/a"
-
-    sector_top_s    = _fmt_top_list(cm.top_sectors, 2) or "n/a"
-    sector_bottom_s = _fmt_top_list(cm.bottom_sectors, 2) or "n/a"
+    holdings_lines = []
+    for h in sorted((pi.holdings or []), key=lambda x: float(getattr(x, "weight", 0.0)), reverse=True):
+        sym = (h.symbol or "").upper()
+        weight = weights.get(sym, float(h.weight or 0.0))
+        holdings_lines.append(
+            f"- {sym}: weight={weight:.2%}; name={getattr(h, 'name', '') or 'n/a'}; "
+            f"sector={(h.sector or 'Unknown')}; ytd_cum={FMT_PCT(sym_cum.get(sym, 0.0))}; "
+            f"contribution={FMT_PCT(contrib_map.get(sym, 0.0))}"
+        )
+    holdings_block = "\n".join(holdings_lines) or "none"
 
     bench_lines = []
-    for name, obj in (cm.benchmarks or {}).items():
-        b_cum = obj.get("cum_return", 0.0)
-        rel   = obj.get("relative_vs_portfolio", 0.0)
-        bench_lines.append(f"- {name}: cum={FMT_PCT(b_cum)}, relative_vs_portfolio={FMT_PCT(rel)}")
-    bench_block = "\n".join(bench_lines) or "n/a"
+    for name, obj in sorted((cm.benchmarks or {}).items()):
+        bench_lines.append(
+            f"- {name}: cum={FMT_PCT(obj.get('cum_return', 0.0))}; "
+            f"relative_vs_portfolio={FMT_PCT(obj.get('relative_vs_portfolio', 0.0))}"
+        )
+    bench_block = "\n".join(bench_lines) or "none"
 
-    conc = cm.concentration or {}
-
-    drag_sym, drag_contrib = (None, 0.0)
-    if cm.losers:
-        drag_sym, drag_contrib = cm.losers[0]
-    drag_weight = float(weights.get(drag_sym or "", 0.0))
-    drag_is_material = (drag_sym is not None) and (drag_contrib < 0.0) and (drag_weight >= 0.10 or abs(drag_contrib) >= 0.01)
-
-    risk_block = (
-        f"volatility={FMT_SIG(cm.volatility)}; "
-        f"volatility_pct={FMT_PCT(cm.volatility)}; "
-        f"beta={FMT_SIG(cm.beta)}; "
-        f"sharpe={FMT_SIG(cm.sharpe)}; "
-        f"sortino={FMT_SIG(cm.sortino)}; "
-        f"max_drawdown={FMT_PCT(cm.max_drawdown)}; "
-        f"hhi={conc.get('hhi', 0):.4f}; "
-        f"effective_n={conc.get('effective_n', 0):.2f}; "
-        f"top_weight={conc.get('top_weight', 0.0):.2%}; "
-        f"warnings={'; '.join(conc.get('warnings', [])) or 'none'}"
-    )
-
-    # News block (titles + sources + dates)
-    nitems = news_items or []
+    news_items = news_items or []
     news_block = "\n".join(
         f"- {it.get('symbol','')}: {it.get('title','')} [source={it.get('source','')}; date={(it.get('publishedAt','') or '')[:10]}]"
-        for it in nitems[:4]
+        for it in news_items[:8]
     ) or "none"
 
-    include_events = bool(getattr(pi, "include_events", True))
-    events_src = (pi.upcoming_events or []) if include_events else []
-    events_block = "\n".join(
-        f"- {ev.get('symbol','')}: {ev.get('type','event')} on {ev.get('date','')} {ev.get('note','')}".strip()
-        for ev in events_src[:3]
-    ) or "none"
+    sector_block = ", ".join(f"{sec}: {FMT_PCT(val)}" for sec, val in (cm.by_sector or [])[:6]) or "none"
+    risk_summary = {
+        "volatility_pct": FMT_PCT(cm.volatility),
+        "beta": FMT_SIG(cm.beta),
+        "max_drawdown": FMT_PCT(cm.max_drawdown),
+        "sharpe": FMT_SIG(cm.sharpe),
+        "sortino": FMT_SIG(cm.sortino),
+        "hhi": f"{(cm.concentration or {}).get('hhi', 0.0):.4f}",
+        "effective_n": f"{(cm.concentration or {}).get('effective_n', 0.0):.2f}",
+        "top_weight": f"{(cm.concentration or {}).get('top_weight', 0.0):.2%}",
+        "warnings": "; ".join((cm.concentration or {}).get('warnings', [])) or "none",
+    }
+
+    winners_s = _fmt_top_list(cm.winners, 3) or "n/a"
+    losers_s = _fmt_top_list(cm.losers, 3) or "n/a"
 
     instruction = (
-      "You are an eloquent financial analyst, writing a single, cohesive summary paragraph for an investor. Your goal is to tell the complete story of the portfolio in a human-friendly narrative, without using any headlines or bullet points.\n\n"
-      "1.  **Open with a direct, numerical comparison** of the portfolio's return against its SPY and QQQ benchmarks, using the `PerformanceSummaryLine` data.\n"
-      "2.  **Weave in the story of the main performance drivers**, identifying the top contributing holdings and any significant laggards.\n"
-      "3.  **Seamlessly transition to the risk profile**. **Do not use jargon like 'Sharpe' or 'HHI'.** Instead, translate the risk into plain English implications, such as whether the portfolio is more volatile than the market, if it rewards risk-taking, and how concentrated it is in its top holdings.\n"
-      "4.  **Conclude with a forward-looking strategic suggestion**, such as recommending a contrasting sector for diversification based on the current concentration.\n\n"
-      "The final output should be a single, well-written paragraph that flows logically from performance to risk to strategy."
+        "You are a seasoned portfolio strategist. Draft a forward-looking briefing for an investor "
+        "using ONLY the supplied data. The analysis must always be framed as Year-to-Date (YTD).\n\n"
+        "Format the response EXACTLY with the following sections and spacing:\n"
+        "📊 Portfolio Allocation\n"
+        "<one line per holding in descending weight, no bullets. Format each line as 'SYMBOL (Company Name if available) – XX% → short forward-looking comment'. "
+        "Blend weight, sector role, and contribution facts. Mention sector balance and strategic role (growth, defensive, income, etc.).\n"
+        "\n"
+        "⚖️ Key Advantages\n"
+        "- Three to five concise bullets about strengths, diversification, quality, secular themes, or risk-adjusted outperformance.\n"
+        "\n"
+        "⚠️ Risks to Watch\n"
+        "- Two to four bullets highlighting concentration, macro/sector exposures, laggards, valuation stretch, or drawdown considerations.\n"
+        "\n"
+        "📝 Conclusions & Recommendations\n"
+        "- Two to three bullets summarising overall quality, balance, and specific diversification or allocation moves to consider.\n"
+        "\n"
+        "Close with one sentence starting with '💡 Bottom line:' that synthesises the go-forward stance.\n\n"
+        "Guidance:\n"
+        "* Keep all numbers in percent with whole numbers when possible (no more than one decimal).\n"
+        "* Reference benchmark context, risk stats, winners/laggards, and sector mix explicitly.\n"
+        "* Use the news feed to anchor catalysts or secular themes (cite the source name in plain text where relevant).\n"
+        "* Do not invent data beyond what is provided."
     )
 
     payload = (
-      f"Timeframe: {pi.timeframe_label}\n"
-      f"Generated: {dt_now}\n"
-      f"Symbols: {', '.join(symbols)}\n"
-      f"Sectors: {', '.join(sectors)}\n\n"
-      f"Positions:\n{positions_block}\n\n"
-      f"Overall cumulative return: {FMT_PCT(cm.cum_return)}\n"
-      f"Benchmarks:\n{bench_block}\n"
-      f"Winners (top): {winners_s}\n"
-      f"Laggards (top): {losers_s}\n"
-      f"Top-2 by weight cum returns: {top2_s}\n"
-      f"DragCandidate: symbol={drag_sym or 'none'}, contrib={FMT_PCT(drag_contrib)}, weight={FMT_PCT(drag_weight)}, is_material={drag_is_material}\n"
-      f"Sectors up: {sector_top_s}\n"
-      f"Sectors down: {sector_bottom_s}\n"
-      f"Upcoming events: \n{events_block}\n"
-      f"News (titles):\n{news_block}\n"
-      f"Flags: {flags_line}\n"
-      f"Pre-Suggested Actions: {pre_actions}\n"
-      f"Per-symbol cumulative returns: {stock_perf_block}\n"
-      f"PerformanceSummaryLine: {comparison_summary_line}\n"
-      f"Score hint: {score_info['score']}/10 — {score_info['reasons']}\n"
+        f"Generated: {dt_now}\n"
+        f"WindowDisplay: {window_display}\n"
+        f"AnalysisWindow: {analysis_window}\n"
+        f"PortfolioCumReturn: {FMT_PCT(cm.cum_return)}\n"
+        f"WinnersTop: {winners_s}\n"
+        f"LosersTop: {losers_s}\n"
+        f"Score: {score_info['score']} ({score_info['reasons']})\n"
+        f"InsightsFlags: {' '.join(insights.get('flags', [])) or 'none'}\n"
+        f"InsightsActions: {', '.join(insights.get('actions', [])) or 'none'}\n"
+        f"Holdings:\n{holdings_block}\n"
+        f"Sectors: {sector_block}\n"
+        f"Benchmarks:\n{bench_block}\n"
+        f"Risk: {risk_summary}\n"
+        f"News:\n{news_block}\n"
     )
+
     return instruction + "\n\n--- DATA ---\n" + payload
 
 
 def _fallback_render(pi: PortfolioInput, cm: ComputedMetrics, news_items: Optional[List[Dict]] = None) -> str:
-    # Deterministic fallback: single engaging paragraph with salient facts only.
+    # Deterministic fallback aligned with the structured template.
     ppy = float(getattr(pi, "periods_per_year", 252.0)) or 252.0
-    ins = derive_insights(cm, ppy=ppy)
+    insights = derive_insights(cm, ppy=ppy)
+    score_info = score_portfolio(cm)
 
-    bench_parts: List[str] = []
-    for name, obj in (cm.benchmarks or {}).items():
-        b_cum = float(obj.get("cum_return", 0.0))
+    sym_cum = _per_symbol_cum_map(pi)
+    contrib_map = {sym: val for sym, val in (cm.by_symbol or [])}
+    holdings_sorted = sorted((pi.holdings or []), key=lambda h: float(getattr(h, "weight", 0.0)), reverse=True)
+
+    allocation_lines: List[str] = []
+    for h in holdings_sorted:
+        sym = (h.symbol or "").upper()
+        weight_pct = float(getattr(h, "weight", 0.0)) * 100
+        sector = h.sector or "Unknown"
+        perf = sym_cum.get(sym, 0.0)
+        contrib = contrib_map.get(sym, 0.0)
+        trend = "driving gains" if contrib > 0 else "tempering returns" if contrib < 0 else "holding steady"
+        allocation_lines.append(
+            f"{sym} ({getattr(h, 'name', '') or sector}) – {weight_pct:.0f}% → {sector} exposure {trend}; YTD move {FMT_PCT(perf)}."
+        )
+
+    benchmarks = cm.benchmarks or {}
+    bench_snippets = []
+    for name, obj in benchmarks.items():
         rel = float(obj.get("relative_vs_portfolio", 0.0))
-        vibe = "ahead of" if rel > 0 else "behind" if rel < 0 else "in line with"
-        bench_parts.append(f"{name} {FMT_PCT(b_cum)} ({vibe} by {FMT_PCT(abs(rel))})")
-    bench_text = ", ".join(bench_parts) or "no benchmarks"
+        gap_phrase = "ahead of" if rel < 0 else "lagging" if rel > 0 else "in line with"
+        bench_snippets.append(f"{name} {gap_phrase} by {FMT_PCT(abs(rel))}")
+    bench_summary = ", ".join(bench_snippets) or "no benchmark context"
 
-    def _cap(items: List[Tuple[str, float]]) -> str:
-        return ", ".join(f"{sym} {FMT_PCT(val)}" for sym, val in (items[:2] if items else [])) or "none"
+    sectors = {h.sector or "Unknown" for h in (pi.holdings or [])}
+    winners = ", ".join(f"{sym} {FMT_PCT(val)}" for sym, val in (cm.winners or [])[:2]) or "n/a"
+    losers = ", ".join(f"{sym} {FMT_PCT(val)}" for sym, val in (cm.losers or [])[:2]) or "n/a"
 
-    winners_s = _cap(cm.winners)
-    losers_s = _cap(cm.losers)
-    sector_up = _cap(cm.top_sectors)
-    sector_down = _cap(cm.bottom_sectors)
+    advantages = [
+        f"YTD return {FMT_PCT(cm.cum_return)} with {bench_summary}.",
+        f"Breadth across {', '.join(sorted(sectors))}.",
+        f"Leaders: {winners}."
+    ]
 
-    evs = pi.upcoming_events or []
-    ev_text = "; ".join(
-        f"{ev.get('symbol','')}: {ev.get('type','event')} {ev.get('date','')}".strip()
-        for ev in evs[:2]
-    ) or "no imminent events"
+    risks: List[str] = []
+    top_weight = float((cm.concentration or {}).get("top_weight", 0.0))
+    if top_weight >= 0.25:
+        risks.append(f"Top position at {top_weight*100:.0f}% concentrates returns.")
+    if float(cm.beta) > 1.1:
+        risks.append(f"Beta {FMT_SIG(cm.beta)} > 1 suggests amplified market swings.")
+    if losers != "n/a":
+        risks.append(f"Watch laggards: {losers}.")
+    if not risks:
+        risks.append("Stay alert to macro shocks despite balanced mix.")
 
-    nws = news_items or []
-    news_text = "; ".join((it.get('title','') or '').strip() for it in nws[:2]) or "no recent briefs"
+    recommendations: List[str] = []
+    actions = insights.get("actions", [])
+    if actions:
+        recommendations.append(actions[0])
+    if len(actions) > 1:
+        recommendations.append(actions[1])
+    recommendations.append(f"Score {score_info['score']}/10 — {score_info['reasons']}.")
 
-    hhi = float((cm.concentration or {}).get("hhi", 0.0))
-    topw = float((cm.concentration or {}).get("top_weight", 0.0))
-    if hhi < 0.15:
-        conc_phrase = "highly diversified"
-    elif hhi < 0.25:
-        conc_phrase = "moderately diversified"
-    else:
-        conc_phrase = "concentrated"
-
-    spy_cum = None
-    for k, obj in (cm.benchmarks or {}).items():
-        if k.upper() == "SPY":
-            spy_cum = float(obj.get("cum_return", 0.0))
-            break
-    numbers = [f"portfolio {FMT_PCT(float(cm.cum_return))}"]
-    if spy_cum is not None:
-        numbers.append(f"SPY {FMT_PCT(spy_cum)}")
-    numbers.append(f"top weight {topw:.0%}")
-
-    final_action = (" " + ins["actions"][0]) if ins.get("actions") else ""
-
-    from .prompts import score_portfolio as _score  # local reuse, avoid circular
-    score_info = _score(cm)
+    bottom_line = (
+        "💡 Bottom line: Maintain discipline around the YTD leaders while nibbling on complementary sectors to keep the mix "
+        "resilient."
+    )
 
     return (
-        f"Over {pi.timeframe_label}, {', '.join(numbers)}; {bench_text}. "
-        f"Leaders: {winners_s}; laggards: {losers_s}. "
-        f"Sectors up: {sector_up}; down: {sector_down}. "
-        f"The portfolio is {conc_phrase}, so single-name concentration is the main swing factor. "
-        f"Upcoming: {ev_text}. Briefs: {news_text}.{final_action} "
-        f"Score: {int(score_info['score'])}/10 — {score_info['reasons']}."
+        "📊 Portfolio Allocation\n"
+        + "\n".join(allocation_lines or ["No holdings provided."])
+        + "\n\n⚖️ Key Advantages\n"
+        + "\n".join(f"- {ln}" for ln in advantages)
+        + "\n\n⚠️ Risks to Watch\n"
+        + "\n".join(f"- {ln}" for ln in risks)
+        + "\n\n📝 Conclusions & Recommendations\n"
+        + "\n".join(f"- {ln}" for ln in recommendations)
+        + f"\n\n{bottom_line}"
     )

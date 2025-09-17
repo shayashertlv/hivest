@@ -2,12 +2,15 @@
 - No dependency on netvest; reads environment variables directly.
 - Returns a callable llm(prompt: str) -> str, or None if Ollama isn't available.
 """
+
 from __future__ import annotations
+
 import os
-import time
 import random
+import time
+from typing import Any, Callable, Dict, Optional
+
 import requests
-from typing import Optional, Callable, Any, Dict
 
 
 # Default model updated to llama3:8b (configurable via .env)
