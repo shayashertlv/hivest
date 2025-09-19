@@ -1,3 +1,4 @@
+"""hivest/shared/fundamentals.py"""
 import os, requests, datetime as _dt
 from typing import Dict
 

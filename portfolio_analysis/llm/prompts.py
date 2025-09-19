@@ -1,3 +1,4 @@
+"""hivest/portfolio_analysis/llm/prompts.py"""
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
@@ -199,12 +200,18 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
     ) or "none"
 
     instruction = (
-      "You are an eloquent financial analyst, writing a single, cohesive summary paragraph for an investor. Your goal is to tell the complete story of the portfolio in a human-friendly narrative, without using any headlines or bullet points.\n\n"
-      "1.  **Open with a direct, numerical comparison** of the portfolio's return against its SPY and QQQ benchmarks, using the `PerformanceSummaryLine` data.\n"
-      "2.  **Weave in the story of the main performance drivers**, identifying the top contributing holdings and any significant laggards.\n"
-      "3.  **Seamlessly transition to the risk profile**. **Do not use jargon like 'Sharpe' or 'HHI'.** Instead, translate the risk into plain English implications, such as whether the portfolio is more volatile than the market, if it rewards risk-taking, and how concentrated it is in its top holdings.\n"
-      "4.  **Conclude with a forward-looking strategic suggestion**, such as recommending a contrasting sector for diversification based on the current concentration.\n\n"
-      "The final output should be a single, well-written paragraph that flows logically from performance to risk to strategy."
+        "You are an eloquent and insightful financial analyst. Your sole task is to generate a structured JSON object that provides a comprehensive analysis of an investment portfolio based on the data provided. **Do not output any text, code, or explanations outside of the final JSON object.**\n\n"
+        "You will be provided with pre-calculated data including performance summaries, risk metrics, sector allocations, and individual holding details. Your goal is to synthesize this quantitative data into a qualitative, strategic analysis.\n\n"
+        "**Generate a JSON object with the following exact structure and keys:**\n\n"
+        "1.  `portfolioAllocation`: (Array of Objects) Detail each major holding.\n"
+        "    -   Each object must have four keys: `ticker` (string), `companyName` (string), `weight` (number, e.g., 25 for 25%), and `narrative` (string, a concise description of the company's role in the portfolio, its industry, and strategic theme, e.g., 'Primary growth engine; technology sector with strong AI exposure.').\n\n"
+        "2.  `keyAdvantages`: (Array of Strings) List the primary strengths of the portfolio.\n"
+        "    -   Analyze the provided sector breakdown, company quality (e.g., blue-chip status), and blend of growth vs. defensive assets. Identify at least 3 distinct advantages, such as sector balance, exposure to long-term themes, or a mix of risk profiles.\n\n"
+        "3.  `risksToWatch`: (Array of Strings) List the key risks and potential vulnerabilities.\n"
+        "    -   Analyze concentration data (both single-stock and sector-level). Identify over-reliance on specific holdings or themes. Note any important economic sectors that are absent from the portfolio.\n\n"
+        "4.  `conclusionsAndRecommendations`: (Array of Strings) Provide actionable conclusions and strategic advice.\n"
+        "    -   Synthesize the advantages and risks into a set of clear takeaways. Suggest specific, forward-looking actions, such as trimming an overweight position, or adding exposure to a diversifying sector (e.g., 'Consider a small allocation to energy (e.g., XOM) or global exposure (an EM ETF).').\n\n"
+        "5.  `bottomLine`: (String) A single, concise summary statement that gives a final verdict on the portfolio's overall quality, balance, and long-term potential. This should be the final, high-level takeaway for the investor."
     )
 
     payload = (

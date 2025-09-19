@@ -1,3 +1,5 @@
+"""hivest/shared/market.py"""
+
 """Market data fetching and return-series utilities for Hivest (no netvest dependency).
 - Uses Yahoo Finance chart API (public JSON) via requests.
 - Builds aligned daily close series and simple returns for symbols and benchmarks.

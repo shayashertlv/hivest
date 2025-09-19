@@ -1,7 +1,5 @@
-"""Lightweight, self-contained Ollama client for Hivest (shared layer).
-- No dependency on netvest; reads environment variables directly.
-- Returns a callable llm(prompt: str) -> str, or None if Ollama isn't available.
-"""
+"""hivest/shared/llm_client.py"""
+
 from __future__ import annotations
 import os
 import time

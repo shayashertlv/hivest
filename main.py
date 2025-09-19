@@ -7,9 +7,11 @@ Provides a simple example of how to assemble inputs and run the portfolio analys
 """
 
 from typing import List, Dict, Any
+import json
 
 from .portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
 from .portfolio_analysis.processing.models import Holding, PortfolioInput, AnalysisOptions
+from .shared.llm_client import make_llm
 
 
 def run_example() -> str:
@@ -51,7 +53,20 @@ def run_example() -> str:
 
     options = AnalysisOptions(top_k_winners_losers=5, concentration_threshold=0.15)
 
-    return analyze_portfolio(pi, options)
+    analysis_result = analyze_portfolio(pi, options)
+
+    instruction = (
+      "You are an insightful financial analyst generating a JSON analysis. Your analysis **must be strictly based on the data provided** in the `calculatedMetrics` and `portfolioHoldings` objects.\n\n"
+      "**Adhere to these rules:**\n"
+      "1.  **For `keyAdvantages`**: Focus only on the quality of the companies listed in `portfolioHoldings`.\n"
+      "2.  **For `risksToWatch`**: Your first point **must** address concentration. Use the `hhiScore` to determine the severity (a score over 2500 means 'extreme concentration'). Your second point **must** identify the overweight sector using the `sectorWeights` data. Your third point **must** mention some of the `missingSectors`.\n"
+      "3.  **For `bottomLine`**: You are **forbidden** from calling the portfolio 'well-balanced' or 'diversified' if the `hhiScore` is above 1500. Instead, describe it as 'concentrated' or 'highly focused'.\n\n"
+      "Generate a JSON object with the following keys: `portfolioAllocation`, `keyAdvantages`, `risksToWatch`, `conclusionsAndRecommendations`, `bottomLine`."
+    )
+
+    llm = make_llm()
+    prompt = instruction + "\n\n--- DATA ---\n" + json.dumps(analysis_result, separators=(",", ":"))
+    return llm(prompt)
 
 
 def run_from_user_input(positions, timeframe="6m", model: str | None = None, host: str | None = None):
@@ -85,7 +100,20 @@ def run_from_user_input(positions, timeframe="6m", model: str | None = None, hos
         llm_host=host,
     )
 
-    return analyze_portfolio(pi, options)
+    analysis_result = analyze_portfolio(pi, options)
+
+    instruction = (
+      "You are an insightful financial analyst generating a JSON analysis. Your analysis **must be strictly based on the data provided** in the `calculatedMetrics` and `portfolioHoldings` objects.\n\n"
+      "**Adhere to these rules:**\n"
+      "1.  **For `keyAdvantages`**: Focus only on the quality of the companies listed in `portfolioHoldings`.\n"
+      "2.  **For `risksToWatch`**: Your first point **must** address concentration. Use the `hhiScore` to determine the severity (a score over 2500 means 'extreme concentration'). Your second point **must** identify the overweight sector using the `sectorWeights` data. Your third point **must** mention some of the `missingSectors`.\n"
+      "3.  **For `bottomLine`**: You are **forbidden** from calling the portfolio 'well-balanced' or 'diversified' if the `hhiScore` is above 1500. Instead, describe it as 'concentrated' or 'highly focused'.\n\n"
+      "Generate a JSON object with the following keys: `portfolioAllocation`, `keyAdvantages`, `risksToWatch`, `conclusionsAndRecommendations`, `bottomLine`."
+    )
+
+    llm = make_llm(model, host)
+    prompt = instruction + "\n\n--- DATA ---\n" + json.dumps(analysis_result, separators=(",", ":"))
+    return llm(prompt)
 
 
 if __name__ == "__main__":

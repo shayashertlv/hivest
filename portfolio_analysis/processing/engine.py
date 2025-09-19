@@ -1,6 +1,10 @@
+"""hivest/portfolio_analysis/processing/engine.py"""
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 import traceback
+import json
+
+import yfinance as yf
 
 from .models import Holding, PortfolioInput, AnalysisOptions, ComputedMetrics
 from ..llm.prompts import build_portfolio_prompt, _fallback_render, score_portfolio
@@ -41,128 +45,84 @@ def holdings_from_user_positions(positions: List[Dict[str, Any]]) -> List[Holdin
     return hs
 
 
-def analyze_portfolio(pi: PortfolioInput, options: Optional[AnalysisOptions] = None) -> str:
+# Add this helper function inside engine.py
+
+def _calculate_sector_weights(holdings: dict) -> dict:
+    """
+    Calculates the total weight of each sector in the portfolio.
+    """
+    sector_weights: Dict[str, float] = {}
+    print("Fetching sector data for each holding...")
+    for ticker_symbol, data in holdings.items():
+        try:
+            ticker = yf.Ticker(ticker_symbol)
+            # Use .info which is more robust than .get_info()
+            sector = ticker.info.get('sector', 'Unknown')
+
+            if sector not in sector_weights:
+                sector_weights[sector] = 0.0
+            # Assuming weights are decimals
+            sector_weights[sector] += float(data.get('weight', 0.0)) * 100.0
+            print(f"  - {ticker_symbol}: {sector}")
+        except Exception as e:
+            print(f"Could not fetch sector for {ticker_symbol}: {e}")
+            if 'Unknown' not in sector_weights:
+                sector_weights['Unknown'] = 0.0
+            sector_weights['Unknown'] += float(data.get('weight', 0.0)) * 100.0
+
+    # Round the final percentages for cleanliness
+    return {k: round(v, 2) for k, v in sector_weights.items()}
+
+
+# Add this helper function inside engine.py
+
+def _calculate_hhi(holdings: dict) -> float:
+    """
+    Calculates the HHI score for the portfolio to measure concentration.
+    Weights are expected as decimals (e.g., 0.25 for 25%).
+    """
+    # HHI uses percentage points (e.g., 25, not 0.25)
+    weights_as_percent = [float(data.get('weight', 0.0)) * 100.0 for data in holdings.values()]
+    hhi = sum([(w ** 2) for w in weights_as_percent])
+    return round(hhi, 2)
+
+
+
+def analyze_portfolio(pi: PortfolioInput, options: Optional[AnalysisOptions] = None) -> Dict[str, Any]:
     options = options or AnalysisOptions()
 
-    # Local logger toggle
-    LOG = print if getattr(options, "verbose", False) else (lambda *a, **k: None)
+    # Prepare a minimal holdings map for helper functions
+    holdings_map: Dict[str, Dict[str, Any]] = {}
+    for h in (pi.holdings or []):
+        holdings_map[h.symbol.upper()] = {
+            "weight": float(h.weight or 0.0),
+            "name": (h.name or ""),
+        }
 
-    # Inputs echo
-    if getattr(options, "echo_tools", True):
-        try:
-            LOG("[inputs] symbols=", [h.symbol for h in (pi.holdings or [])])
-            LOG(f"[inputs] timeframe='{pi.timeframe_label}'")
-            LOG("[inputs] weights(fractions)=", {h.symbol: float(h.weight or 0.0) for h in (pi.holdings or [])})
-            if any(getattr(h, "avg_buy_price", None) is not None for h in (pi.holdings or [])):
-                LOG("[inputs] avg_buy_price provided for:", [h.symbol for h in pi.holdings if getattr(h, "avg_buy_price", None) is not None])
-        except Exception:
-            pass
+    # 1. Calculate the new metrics using our helpers
+    hhi_score = _calculate_hhi(holdings_map)
+    sector_weights = _calculate_sector_weights(holdings_map)
 
-    # Auto-fill missing series from market data if needed
-    try:
-        needs_fill = not (pi.portfolio_returns and pi.benchmark_returns and pi.per_symbol_returns)
-        if needs_fill:
-            try:
-                yf_range = infer_yahoo_range(getattr(pi, "timeframe_label", "6m"))
-            except Exception:
-                yf_range = "auto"
-            LOG(f"[market] using Yahoo Finance public chart API (range={yf_range}) to fill series…")
-            auto_fill_series(pi)
-            LOG(f"[market] per-symbol returns filled for "
-                f"{sum(1 for v in (pi.per_symbol_returns or {}).values() if v)} symbols; "
-                f"portfolio series length={len(pi.portfolio_returns or [])}")
-    except Exception:
-        pass
+    # 2. Identify missing key sectors for the LLM's context
+    all_major_sectors = [
+        "Technology", "Healthcare", "Financials", "Consumer Discretionary",
+        "Communication Services", "Industrials", "Consumer Staples",
+        "Energy", "Utilities", "Real Estate", "Materials"
+    ]
+    present_sectors = set(sector_weights.keys())
+    missing_sectors = [s for s in all_major_sectors if s not in present_sectors]
 
-    # Collect symbols, sectors, and weights
-    symbols = [h.symbol.upper() for h in (pi.holdings or [])]
-    weights = {h.symbol.upper(): float(h.weight or 0.0) for h in (pi.holdings or [])}
+    # 3. Construct the final, comprehensive data object
+    analysis_result: Dict[str, Any] = {
+        "portfolioHoldings": [
+            {"ticker": sym, "companyName": info.get("name", ""), "weight": float(info.get("weight", 0.0)) * 100.0}
+            for sym, info in holdings_map.items()
+        ],
+        "calculatedMetrics": {
+            "hhiScore": hhi_score,
+            "sectorWeights": sector_weights,
+            "missingSectors": missing_sectors,
+        },
+    }
 
-    # --- performance & attribution ---
-    LOG("[performance] computing cumulative return and benchmark comparison…")
-    cum_ret = cumulative_return(pi.portfolio_returns)
-    bench = benchmark_comparison(pi.portfolio_returns, pi.benchmark_returns or {})
-
-    LOG("[attribution] by-position and by-sector attribution…")
-    pos_attr = attribution_by_position([vars(h) for h in pi.holdings], pi.per_symbol_returns)
-    sec_attr = attribution_by_sector([vars(h) for h in pi.holdings], pi.per_symbol_returns)
-
-    # --- risk metrics ---
-    LOG("[risk] computing volatility, beta, Sharpe, Sortino, and drawdown stats…")
-    vol = compute_volatility(pi.portfolio_returns)
-    market = pi.market_returns or (pi.benchmark_returns.get("SPY") if pi.benchmark_returns else None) or []
-    beta = compute_beta(pi.portfolio_returns, market)
-    sharpe = compute_sharpe(pi.portfolio_returns, risk_free_rate=pi.risk_free_rate)
-
-    dd_stats = compute_drawdown_stats(pi.portfolio_returns)
-    sortino = compute_sortino(pi.portfolio_returns)
-
-    ppy = float(getattr(pi, "periods_per_year", 252.0)) or 252.0
-    vol_annual = vol * (ppy ** 0.5)
-    sharpe_annual = sharpe * (ppy ** 0.5)
-    sortino_annual = sortino * (ppy ** 0.5)
-
-    conc = compute_concentration(weights, threshold=options.concentration_threshold)
-
-    cm = ComputedMetrics(
-        cum_return=cum_ret,
-        benchmarks=bench["benchmarks"],
-        by_symbol=pos_attr["by_symbol"],
-        winners=pos_attr["winners"],
-        losers=pos_attr["losers"],
-        by_sector=sec_attr["by_sector"],
-        top_sectors=sec_attr["top"],
-        bottom_sectors=sec_attr["bottom"],
-        volatility=vol,
-        beta=beta,
-        sharpe=sharpe,
-        concentration=conc,
-        max_drawdown=dd_stats["max_drawdown"],
-        calmar_like=dd_stats["calmar_like"],
-        sortino=sortino,
-        volatility_annual=vol_annual,
-        sharpe_annual=sharpe_annual,
-        sortino_annual=sortino_annual,
-    )
-
-    # Resources: news / briefs
-    news_items: list[dict] = []
-    if getattr(options, "include_news", True):
-        LOG("[news] fetching recent news (GNews/MediaStack) with fallback to Ollama briefs.")
-        try:
-            news_items = get_news_for_holdings([vars(h) for h in pi.holdings], limit=options.news_limit) or []
-        except Exception:
-            news_items = []
-
-    setattr(pi, 'include_events', bool(options.include_events))
-    prompt = build_portfolio_prompt(pi, cm, news_items=news_items)
-
-    # LLM call with graceful fallback
-    llm = None
-    try:
-        llm = make_llm(getattr(options, "llm_model", None), getattr(options, "llm_host", None))
-    except Exception:
-        llm = None
-
-    if callable(llm):
-        LOG("[llm] rendering summary via chat completion.")
-        try:
-            text = (llm(prompt) or "").strip()
-            # Ensure score hint correctness by recomputing (uses cm values)
-            try:
-                score_info = score_portfolio(cm)
-            except Exception:
-                score_info = {"score": 7, "reasons": "balanced risk/return"}
-            # We no longer force-insert score line; keep model output as-is
-            if text:
-                return text
-        except Exception:
-            print(f"\n[LLM_ERROR] The LLM call failed. The specific error is:\n---")
-            traceback.print_exc()
-            print("---\n")
-            pass
-    else:
-        LOG("[fallback] rendering deterministic summary (no LLM).")
-
-    # Deterministic paragraph fallback
-    return _fallback_render(pi, cm, news_items=news_items)
+    return analysis_result
