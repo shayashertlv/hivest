@@ -32,8 +32,8 @@ def _norm_syms(symbols: Iterable[str]) -> list[str]:
 
 def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
     """
-    Try GNews (https://gnews.io) then MediaStack (https://mediastack.com) using env keys.
-    Falls back to [] if neither is configured or reachable.
+    Try GNews (https://gnews.io) using env key.
+    Falls back to [] if not configured or reachable.
 
     Output shape: [{source, title, url, publishedAt, symbol}]
     """
@@ -43,7 +43,6 @@ def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
 
     out: list[dict] = []
     gnews_key = os.getenv("GNEWS_FREE_API_KEY", "").strip()
-    mediastack_key = os.getenv("MEDIASTACK_FREE_API_KEY", "").strip()
 
     session = requests.Session()
     session.headers.update({"User-Agent": "hivest-news/1.0"})
@@ -71,28 +70,6 @@ def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
         if out:
             return out[:limit]
 
-    # ---- 2) MediaStack
-    if mediastack_key:
-        for sym in syms:
-            try:
-                r = session.get(
-                    "https://api.mediastack.com/v1/news",
-                    params={"access_key": mediastack_key, "languages": "en", "keywords": sym, "limit": min(5, limit)},
-                    timeout=7,
-                )
-                if r.ok:
-                    for a in (r.json().get("data") or [])[:limit]:
-                        out.append({
-                            "source": a.get("source") or "MediaStack",
-                            "title": a.get("title") or "",
-                            "url": a.get("url") or "",
-                            "publishedAt": a.get("published_at") or "",
-                            "symbol": sym,
-                        })
-            except Exception:
-                pass
-        if out:
-            return out[:limit]
 
     # Nothing configured / reachable
     return []
@@ -100,7 +77,7 @@ def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
 def get_news_for_holdings(holdings: list[dict], limit: int = 10) -> list[dict]:
     """
     Preferred entry point:
-    1) Try web news (GNews/MediaStack) for the portfolio symbols.
+    1) Try web news (GNews) for the portfolio symbols.
     2) If none available, fallback to local Ollama-based one-liners via build_position_brief().
 
     When trimming to `limit`, interleave items by symbol (round-robin) to avoid

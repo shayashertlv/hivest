@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 import traceback
 import json
-import yfinance as yf
+import os, requests
 
 from .models import Holding, PortfolioInput, AnalysisOptions, ComputedMetrics
 from ...shared.market import auto_fill_series
@@ -39,18 +39,21 @@ def holdings_from_user_positions(positions: List[Dict[str, Any]]) -> List[Holdin
             bought_at=p.get("bought_at"),
         )
 
-        # --- ADD THIS BLOCK ---
-        # Fetch company name and sector from yfinance
+        # Fetch company name and sector via FMP profile (no yfinance)
         try:
-            ticker_info = yf.Ticker(symbol).info
-            holding.name = ticker_info.get('longName', symbol)
-            holding.sector = ticker_info.get('sector', 'Unknown')
-            print(f"Successfully fetched info for {symbol}: Sector='{holding.sector}', Name='{holding.name}'")
-        except Exception as e:
-            print(f"Could not fetch info for {symbol}: {e}. Setting to defaults.")
+            fmp = (os.getenv("FMP_FREE_API_KEY") or "").strip()
             holding.name = symbol
             holding.sector = "Unknown"
-        # --- END BLOCK ---
+            if fmp:
+                r = requests.get(f"https://financialmodelingprep.com/api/v3/profile/{symbol}",
+                                 params={"apikey": fmp}, timeout=7)
+                if r.ok and isinstance(r.json(), list) and r.json():
+                    prof = r.json()[0]
+                    holding.name = prof.get("companyName") or symbol
+                    holding.sector = prof.get("sector") or "Unknown"
+            print(f"Info for {symbol}: Sector='{holding.sector}', Name='{holding.name}'")
+        except Exception as e:
+            print(f"Could not fetch profile for {symbol}: {e}. Using defaults.")
 
         hs.append(holding)
 
@@ -63,7 +66,7 @@ def analyze_portfolio(pi: PortfolioInput, options: Optional[AnalysisOptions] = N
     options = options or AnalysisOptions()
     holdings_as_dicts = [{"symbol": h.symbol, "weight": h.weight, "sector": h.sector} for h in pi.holdings]
 
-    # 1. Auto-fill all time-series data (returns, benchmarks) using Yahoo Finance
+    # 1. Auto-fill all time-series data (returns, benchmarks) using market data (FMP)
     if options.verbose:
         print("Fetching market data for portfolio and benchmarks...")
     auto_fill_series(pi)

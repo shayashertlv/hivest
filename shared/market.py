@@ -1,8 +1,8 @@
 """hivest/shared/market.py"""
 from __future__ import annotations
 
-"""Market data fetching and return-series utilities for Hivest (no netvest dependency).
-- Uses Yahoo Finance chart API (public JSON) via requests.
+"""Market data fetching and return-series utilities for Hivest.
+- Uses Financial Modeling Prep (FMP) for historical prices via requests.
 - Builds aligned daily close series and simple returns for symbols and benchmarks.
 
 Key functions:
@@ -14,11 +14,11 @@ Key functions:
 - auto_fill_series(pi: 'PortfolioInput') -> 'PortfolioInput' (mutates and returns pi)
 
 Notes:
-- Yahoo symbols are used as provided. Common ETFs like SPY/QQQ/QQQM typically work.
+- Symbols are used as provided. Common ETFs like SPY/QQQ/QQQM typically work.
 - We compute portfolio returns as a constant-weight daily blend: sum_i(w_i * r_i,t).
 - Benchmarks: at least SPY is filled; QQQ is added if available.
 """
-import re
+import os, datetime as _dt, re
 import requests
 from typing import Dict, List, Tuple, Optional
 
@@ -71,51 +71,49 @@ def infer_yahoo_range(label: Optional[str]) -> str:
 
 
 def fetch_yahoo_chart(symbol: str, yf_range: str = '6mo', interval: str = '1d') -> Tuple[List[str], List[float]]:
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-    params = {
-        'range': yf_range,
-        'interval': interval,
-        'includePrePost': 'false',
-    }
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Connection': 'keep-alive'
-    }
+    """
+    Provider-neutral price fetcher implemented via Financial Modeling Prep (FMP).
+    Keeps the legacy name/signature for compatibility.
+    """
+    # Map common range labels to a start date for FMP
     try:
-        r = _session.get(url, params=params, headers=headers, timeout=10)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        # Surface something actionable but don't crash the whole run
-        detail = ""
-        if hasattr(e, "response") and getattr(e.response, "text", None):
-            detail = str(e.response.text)[:200].replace("\n", " ")
-        print(f"[market] Yahoo fetch failed for {symbol}: {e} {detail}".strip())
+        today = _dt.date.today()
+        s = (yf_range or '6mo').lower()
+        if s == 'ytd':
+            start = _dt.date(today.year, 1, 1)
+        else:
+            months = {
+                '1mo': 1, '3mo': 3, '6mo': 6,
+                '1y': 12, '2y': 24, '5y': 60,
+            }.get(s, 6)
+            # approx 30.44 days/month
+            start = today - _dt.timedelta(days=int(months * 30.44))
+    except Exception:
+        start = _dt.date.today() - _dt.timedelta(days=180)
+        today = _dt.date.today()
+
+    fmp = (os.getenv('FMP_FREE_API_KEY') or '').strip()
+    if not fmp:
         return ([], [])
-    js = r.json()
-    res = ((js or {}).get('chart') or {}).get('result')
-    if not res:
-        return [], []
-    result0 = res[0]
-    timestamps = result0.get('timestamp') or []
-    ind = (result0.get('indicators') or {}).get('quote') or []
-    quote0 = ind[0] if ind else {}
-    closes = quote0.get('close') or []
-    # Convert timestamps (epoch seconds) to YYYY-MM-DD strings and filter out None closes
-    dates: List[str] = []
-    prices: List[float] = []
-    for t, c in zip(timestamps, closes):
-        if c is None:
-            continue
-        try:
-            # Yahoo timestamps are seconds since epoch (UTC)
-            from datetime import datetime
-            dt = datetime.utcfromtimestamp(int(t))
-            dates.append(dt.strftime('%Y-%m-%d'))
-            prices.append(float(c))
-        except Exception:
-            continue
+
+    url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{symbol.upper()}"
+    params = {"from": start.isoformat(), "to": today.isoformat(), "apikey": fmp, "serietype": "line"}
+    try:
+        r = _session.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        js = r.json() or {}
+        hist = js.get('historical') or []
+    except Exception as e:
+        print(f"[market] FMP fetch failed for {symbol}: {e}")
+        return ([], [])
+
+    # FMP returns most-recent-first; sort ascending by date
+    try:
+        rows = sorted((x for x in hist if x.get('close') is not None and x.get('date')), key=lambda x: x['date'])
+    except Exception:
+        rows = []
+    dates = [str(x['date']) for x in rows]
+    prices = [float(x['close']) for x in rows]
     return dates, prices
 
 
@@ -159,7 +157,7 @@ def align_by_dates(series_map: Dict[str, Tuple[List[str], List[float]]]) -> Dict
     ds_anchor, ps_anchor = candidates[anchor_sym]
 
     # Ensure anchor dates are strictly increasing and paired with prices
-    # (Yahoo is usually sorted, but we guard anyway)
+    # (Provider data is usually sorted, but we guard anyway)
     anc_pairs = sorted(zip(ds_anchor, ps_anchor), key=lambda x: x[0])
     ds_anchor_sorted = [d for d, _ in anc_pairs]
 
@@ -228,7 +226,7 @@ def build_per_symbol_returns(symbols: List[str], timeframe_label: str) -> Dict[s
 
 def auto_fill_series(pi) -> object:
     """
-    Populate missing series in a PortfolioInput in-place using Yahoo Finance data.
+    Populate missing series in a PortfolioInput in-place using market data (FMP).
     - per_symbol_returns: built for the portfolio symbols
     - portfolio_returns: weighted blend of per-symbol daily returns
     - benchmark_returns: ensure at least SPY (and QQQ if available) is present

@@ -50,7 +50,7 @@ def run_from_user_input(positions, model: str | None = None, host: str | None = 
 
     holdings: List[Holding] = holdings_from_user_positions(positions)
 
-    # auto_fill_series will populate the return data from Yahoo Finance
+    # auto_fill_series will populate the return data from FMP (via shared.market)
     pi = PortfolioInput(
         holdings=holdings,
         timeframe_label=timeframe,
