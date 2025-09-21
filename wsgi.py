@@ -17,5 +17,17 @@ PARENT_DIR = CURRENT_DIR.parent
 if str(PARENT_DIR) not in sys.path:
     sys.path.insert(0, str(PARENT_DIR))
 
-# Now import the Flask app from the package
-from hivest.api import app as application  # gunicorn expects `application` by default
+# Import the Flask app robustly without assuming the top-level package name is known
+try:
+    # If this module is imported as part of the 'hivest' package
+    from .api import app as application  # type: ignore
+except Exception:
+    # Fallback: import api.py directly by file path (works when running as top-level module)
+    import importlib.util
+    api_path = CURRENT_DIR / "api.py"
+    spec = importlib.util.spec_from_file_location("api", api_path)
+    if spec is None or spec.loader is None:
+        raise
+    api = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(api)
+    application = api.app  # gunicorn expects `application` by default
