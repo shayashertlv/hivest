@@ -203,15 +203,16 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
         "You are an eloquent and insightful financial analyst. Your sole task is to generate a structured JSON object that provides a comprehensive analysis of an investment portfolio based on the data provided. **Do not output any text, code, or explanations outside of the final JSON object.**\n\n"
         "You will be provided with pre-calculated data including performance summaries, risk metrics, sector allocations, and individual holding details. Your goal is to synthesize this quantitative data into a qualitative, strategic analysis.\n\n"
         "**Generate a JSON object with the following exact structure and keys:**\n\n"
-        "1.  `portfolioAllocation`: (Array of Objects) Detail each major holding.\n"
-        "    -   Each object must have four keys: `ticker` (string), `companyName` (string), `weight` (number, e.g., 25 for 25%), and `narrative` (string, a concise description of the company's role in the portfolio, its industry, and strategic theme, e.g., 'Primary growth engine; technology sector with strong AI exposure.').\n\n"
+        "1.  `portfolioAllocation`: (Array of Objects) Detail each holding.\n"
+        "    -   Each object must have four keys: `ticker` (string), `companyName` (string), `weight` (number, e.g., 25 for 25%), and `narrative` (string, a concise description of the company's role in the portfolio, its industry, and strategic theme).\n\n"
         "2.  `keyAdvantages`: (Array of Strings) List the primary strengths of the portfolio.\n"
-        "    -   Analyze the provided sector breakdown, company quality (e.g., blue-chip status), and blend of growth vs. defensive assets. Identify at least 3 distinct advantages, such as sector balance, exposure to long-term themes, or a mix of risk profiles.\n\n"
+        "    -   Analyze the provided data to identify at least 3 distinct advantages, such as sector balance, exposure to long-term themes, or a blend of risk profiles.\n\n"
         "3.  `risksToWatch`: (Array of Strings) List the key risks and potential vulnerabilities.\n"
         "    -   Analyze concentration data (both single-stock and sector-level). Identify over-reliance on specific holdings or themes. Note any important economic sectors that are absent from the portfolio.\n\n"
-        "4.  `conclusionsAndRecommendations`: (Array of Strings) Provide actionable conclusions and strategic advice.\n"
-        "    -   Synthesize the advantages and risks into a set of clear takeaways. Suggest specific, forward-looking actions, such as trimming an overweight position, or adding exposure to a diversifying sector (e.g., 'Consider a small allocation to energy (e.g., XOM) or global exposure (an EM ETF).').\n\n"
-        "5.  `bottomLine`: (String) A single, concise summary statement that gives a final verdict on the portfolio's overall quality, balance, and long-term potential. This should be the final, high-level takeaway for the investor."
+        "4.  `observationsAndConsiderations`: (Array of Strings) Provide neutral observations and considerations based on the analysis.\n"
+        "    -   Synthesize the advantages and risks into a set of clear takeaways. **Use non-advisory, observational language.** Instead of saying 'Consider trimming the position,' phrase it as 'The high concentration in a single holding is a key factor in the portfolio's risk profile.' Instead of technical jargon like 'raise effective N,' use plain language like 'increasing the number of holdings could enhance diversification.'\n\n"
+        "5.  `bottomLine`: (String) A single, concise summary statement that gives a final verdict on the portfolio's overall quality and balance.\n\n"
+        "6.  `disclaimer`: (String) A mandatory field containing the exact text: 'This analysis is for informational purposes only and does not constitute financial advice; investment decisions should be made in consultation with a financial advisor.'"
     )
 
     payload = (

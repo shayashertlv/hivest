@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 
 from .portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
 from .portfolio_analysis.processing.models import Holding, PortfolioInput, AnalysisOptions
+from .portfolio_analysis.llm.prompts import build_portfolio_prompt
 from .shared.llm_client import make_llm
 
 
@@ -28,9 +29,11 @@ def run_example() -> str:
     instruction = (
         "You are an insightful financial analyst generating a JSON analysis. Your analysis **must be strictly based on the data provided** in the `calculatedMetrics` and `portfolioHoldings` objects.\n\n"
         "**Adhere to these rules:**\n"
-        "1.  **For `keyAdvantages`**: Focus only on the quality of the companies listed in `portfolioHoldings`.\n"
-        "2.  **For `risksToWatch`**: Your first point **must** address concentration. Use the `hhiScore` to determine the severity (a score over 2500 means 'extreme concentration'). Your second point **must** identify the overweight sector using the `sectorWeights` data. Your third point **must** mention some of the `missingSectors`.\n"
-        "3.  **For `bottomLine`**: You are **forbidden** from calling the portfolio 'well-balanced' or 'diversified' if the `hhiScore` is above 1500. Instead, describe it as 'concentrated' or 'highly focused'.\n\n"
+        "1.  **For `portfolioAllocation`**: Create a narrative for each holding describing its role and sector.\n"
+        "2.  **For `keyAdvantages`**: Identify strengths like sector balance, blend of growth/defense, and company quality.\n"
+        "3.  **For `risksToWatch`**: Address concentration (using `hhiScore`), overweight sectors (using `sectorWeights`), and note the `missingSectors`.\n"
+        "4.  **For `conclusionsAndRecommendations`**: Provide actionable advice based on the advantages and risks.\n"
+        "5.  **For `bottomLine`**: Give a concise, final verdict on the portfolio's quality.\n\n"
         "Generate a JSON object with the following keys: `portfolioAllocation`, `keyAdvantages`, `risksToWatch`, `conclusionsAndRecommendations`, `bottomLine`."
     )
     llm = make_llm()
@@ -71,19 +74,22 @@ def run_from_user_input(positions, model: str | None = None, host: str | None = 
         llm_host=host,
     )
 
-    analysis_result = analyze_portfolio(pi, options)
-
-    instruction = (
-        "You are an insightful financial analyst generating a JSON analysis. Your analysis **must be strictly based on the data provided** in the `calculatedMetrics` and `portfolioHoldings` objects.\n\n"
-        "**Adhere to these rules:**\n"
-        "1.  **For `keyAdvantages`**: Focus only on the quality of the companies listed in `portfolioHoldings`.\n"
-        "2.  **For `risksToWatch`**: Your first point **must** address concentration. Use the `hhiScore` to determine the severity (a score over 2500 means 'extreme concentration'). Your second point **must** identify the overweight sector using the `sectorWeights` data. Your third point **must** mention some of the `missingSectors`.\n"
-        "3.  **For `bottomLine`**: You are **forbidden** from calling the portfolio 'well-balanced' or 'diversified' if the `hhiScore` is above 1500. Instead, describe it as 'concentrated' or 'highly focused'.\n\n"
-        "Generate a JSON object with the following keys: `portfolioAllocation`, `keyAdvantages`, `risksToWatch`, `conclusionsAndRecommendations`, `bottomLine`."
+    # This replaces the old analyze_portfolio call and the hardcoded instruction string
+    analysis_context = analyze_portfolio(pi, options)
+    
+    # Use the sophisticated prompt builder instead of a simple instruction string
+    prompt = build_portfolio_prompt(
+        analysis_context["portfolio_input"],
+        analysis_context["computed_metrics"],
+        analysis_context["news_items"]
     )
 
-    llm = make_llm(model, host)
-    prompt = instruction + "\n\n--- DATA ---\n" + json.dumps(analysis_result, separators=(",", ":"))
+    print("\n--- Sending Prompt to LLM ---")
+    if options.verbose:
+        print(prompt)
+    print("---------------------------\n")
+
+    llm = make_llm(options.llm_model, options.llm_host)
     return llm(prompt)
 
 
