@@ -1,8 +1,9 @@
 from flask import Flask, request, jsonify
-from hivest.portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
-from hivest.portfolio_analysis.processing.models import PortfolioInput, AnalysisOptions
-from hivest.portfolio_analysis.llm.prompts import build_portfolio_prompt
-from hivest.shared.llm_client import make_llm
+from .portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
+from .portfolio_analysis.processing.models import PortfolioInput, AnalysisOptions
+from .portfolio_analysis.llm.prompts import build_portfolio_prompt
+from .shared.llm_client import make_llm
+
 
 app = Flask(__name__)
 
