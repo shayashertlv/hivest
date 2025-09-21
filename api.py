@@ -7,18 +7,26 @@ from .shared.llm_client import make_llm
 
 app = Flask(__name__)
 
-@app.route('/analyze', methods=['POST'])
+@app.route('/analyze', methods=['GET', 'POST', 'OPTIONS'])
 def analyze():
     """
     This is the main API endpoint for portfolio analysis.
-    It expects a JSON payload with a "portfolio" key,
-    which is a string in the format 'TICKER1:WEIGHT1 TICKER2:WEIGHT2 ...'
+    It accepts:
+    - POST with JSON body: {"portfolio": "AAPL:0.5 MSFT:0.3 GOOG:0.2"}
+    - GET with either a query parameter ?portfolio=... or a JSON body (if provided by the client)
+    The portfolio value is a string 'TICKER1:WEIGHT1 TICKER2:WEIGHT2 ...'
     """
-    data = request.get_json()
-    if not data or 'portfolio' not in data:
-        return jsonify({"error": "Invalid input. 'portfolio' key is missing."}), 400
+    data = request.get_json(silent=True) or {}
+    portfolio_string = data.get('portfolio') or request.args.get('portfolio')
+    if not portfolio_string:
+        return jsonify({
+            "error": "Invalid input. Provide 'portfolio' as JSON body or query parameter.",
+            "examples": {
+                "GET": "/analyze?portfolio=AAPL:0.5 MSFT:0.3 GOOG:0.2",
+                "POST": {"portfolio": "AAPL:0.5 MSFT:0.3 GOOG:0.2"}
+            }
+        }), 400
 
-    portfolio_string = data['portfolio']
     positions = []
     # Parse the portfolio string into a list of dictionaries
     for holding in portfolio_string.split():
