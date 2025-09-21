@@ -22,12 +22,27 @@ try:
     # If this module is imported as part of the 'hivest' package
     from .api import app as application  # type: ignore
 except Exception:
-    # Fallback: import api.py directly by file path (works when running as top-level module)
+    # Fallback: load api.py as 'hivest.api' and create a lightweight 'hivest' namespace package
     import importlib.util
+    import types
+
+    pkg_name = "hivest"
+
+    # Ensure the directory containing api.py is on sys.path
+    if str(CURRENT_DIR) not in sys.path:
+        sys.path.insert(0, str(CURRENT_DIR))
+
+    # Create a pseudo package 'hivest' that points to CURRENT_DIR so relative imports in api.py resolve
+    if pkg_name not in sys.modules:
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = [str(CURRENT_DIR)]  # type: ignore[attr-defined]
+        sys.modules[pkg_name] = pkg
+
     api_path = CURRENT_DIR / "api.py"
-    spec = importlib.util.spec_from_file_location("api", api_path)
+    spec = importlib.util.spec_from_file_location(f"{pkg_name}.api", api_path)
     if spec is None or spec.loader is None:
         raise
     api = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = api
     spec.loader.exec_module(api)
     application = api.app  # gunicorn expects `application` by default
