@@ -1,4 +1,5 @@
 """hivest/shared/market.py"""
+from __future__ import annotations
 
 """Market data fetching and return-series utilities for Hivest (no netvest dependency).
 - Uses Yahoo Finance chart API (public JSON) via requests.
@@ -17,12 +18,15 @@ Notes:
 - We compute portfolio returns as a constant-weight daily blend: sum_i(w_i * r_i,t).
 - Benchmarks: at least SPY is filled; QQQ is added if available.
 """
-from __future__ import annotations
 import re
 import requests
 from typing import Dict, List, Tuple, Optional
 
 _session = requests.Session()
+
+
+import re
+from typing import Optional
 
 def infer_yahoo_range(label: Optional[str]) -> str:
     s = (label or '').strip().lower()
