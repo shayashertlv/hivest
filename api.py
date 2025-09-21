@@ -10,86 +10,84 @@ app = Flask(__name__)
 # Enable CORS for all routes
 CORS(app)
 
-
-@app.route('/analyze', methods=['POST', 'OPTIONS'])
+@app.route('/analyze', methods=['GET', 'POST', 'OPTIONS'])
 def analyze():
     """
     This is the main API endpoint for portfolio analysis.
-    It accepts POST requests with a JSON body:
-    {"portfolio": "AAPL:0.5 MSFT:0.3 GOOG:0.2"}
+    It accepts both GET and POST requests.
+    - POST: Expects a JSON body -> {"portfolio": "AAPL:0.5 MSFT:0.3"}
+    - GET: Expects a URL query parameter -> /analyze?portfolio=AAPL:0.5%20MSFT:0.3
     """
     if request.method == 'OPTIONS':
         return jsonify(success=True), 200
 
-    # This endpoint now only accepts POST requests.
+    portfolio_string = None
     if request.method == 'POST':
         data = request.get_json(silent=True)
-        if not data or 'portfolio' not in data:
-            return jsonify({
-                "error": "Invalid POST request. 'portfolio' key is missing from the JSON body.",
-                "example": {"portfolio": "AAPL:0.5 MSFT:0.3 GOOG:0.2"}
-            }), 400
+        if data and 'portfolio' in data:
+            portfolio_string = data.get('portfolio')
+    elif request.method == 'GET':
+        portfolio_string = request.args.get('portfolio')
 
-        portfolio_string = data.get('portfolio')
+    if not portfolio_string or not isinstance(portfolio_string, str) or not portfolio_string.strip():
+        return jsonify({
+            "error": "The 'portfolio' string is missing or empty. Please provide it in the JSON body for a POST request or as a URL parameter for a GET request.",
+            "examples": {
+                "GET": "/analyze?portfolio=AAPL:0.5%20MSFT:0.3",
+                "POST": {"portfolio": "AAPL:0.5 MSFT:0.3"}
+            }
+        }), 400
 
-        if not isinstance(portfolio_string, str) or not portfolio_string.strip():
-            return jsonify({"error": "'portfolio' must be a non-empty string."}), 400
-
-        positions = []
-        # Parse the portfolio string into a list of dictionaries
-        for holding in portfolio_string.split():
-            try:
-                symbol, weight_str = holding.split(':')
-                weight = float(weight_str)
-                positions.append({"symbol": symbol.strip(), "weight": weight})
-            except (ValueError, TypeError):
-                # Skip any malformed pairs
-                pass
-
-        if not positions:
-            return jsonify({"error": "No valid holdings found. Ensure the format is 'TICKER:WEIGHT'."}), 400
-
+    positions = []
+    # Parse the portfolio string into a list of dictionaries
+    for holding in portfolio_string.split():
         try:
-            timeframe = "ytd"
-            holdings = holdings_from_user_positions(positions)
+            symbol, weight_str = holding.split(':')
+            weight = float(weight_str)
+            positions.append({"symbol": symbol.strip(), "weight": weight})
+        except (ValueError, TypeError):
+            # Skip any malformed pairs
+            pass
 
-            pi = PortfolioInput(
-                holdings=holdings,
-                timeframe_label=timeframe,
-                portfolio_returns=[],
-                benchmark_returns={},
-                market_returns=[],
-                per_symbol_returns={},
-                risk_free_rate=0.0001,
-                upcoming_events=[],
-            )
+    if not positions:
+        return jsonify({"error": "No valid holdings were found. Please ensure the format is 'TICKER:WEIGHT'."}), 400
 
-            options = AnalysisOptions(
-                include_news=True,
-                news_limit=6,
-            )
+    try:
+        timeframe = "ytd"
+        holdings = holdings_from_user_positions(positions)
 
-            analysis_context = analyze_portfolio(pi, options)
-            prompt = build_portfolio_prompt(
-                analysis_context["portfolio_input"],
-                analysis_context["computed_metrics"],
-                analysis_context["news_items"]
-            )
+        pi = PortfolioInput(
+            holdings=holdings,
+            timeframe_label=timeframe,
+            portfolio_returns=[],
+            benchmark_returns={},
+            market_returns=[],
+            per_symbol_returns={},
+            risk_free_rate=0.0001,
+            upcoming_events=[],
+        )
 
-            llm = make_llm("llama3:8b")
-            analysis_result = llm(prompt)
+        options = AnalysisOptions(
+            include_news=True,
+            news_limit=6,
+        )
 
-            return jsonify({"analysis": analysis_result})
+        analysis_context = analyze_portfolio(pi, options)
+        prompt = build_portfolio_prompt(
+            analysis_context["portfolio_input"],
+            analysis_context["computed_metrics"],
+            analysis_context["news_items"]
+        )
 
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-            traceback.print_exc()
-            return jsonify({"error": "An internal server error occurred."}), 500
+        llm = make_llm("llama3:8b")
+        analysis_result = llm(prompt)
 
-    # If the request is not POST or OPTIONS, this part will not be reached
-    # because of the 'methods' argument in the route decorator.
-    return jsonify({"error": "Method not allowed."}), 405
+        return jsonify({"analysis": analysis_result})
 
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        traceback.print_exc()
+        return jsonify({"error": "An internal server error occurred during analysis."}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
