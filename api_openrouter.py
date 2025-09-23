@@ -6,9 +6,9 @@ import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-from hivest.portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
-from hivest.portfolio_analysis.processing.models import PortfolioInput, AnalysisOptions
-from hivest.portfolio_analysis.llm.prompts import build_portfolio_prompt
+from portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
+from portfolio_analysis.processing.models import PortfolioInput, AnalysisOptions
+from portfolio_analysis.llm.prompts import build_portfolio_prompt
 
 
 # --- OpenRouter LLM helper (replicates llm_client.make_llm flow, but for OpenRouter) ---
