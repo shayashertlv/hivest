@@ -38,7 +38,7 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
     s20, s50, s200 = sma(closes, 20), sma(closes, 50), sma(closes, 200)
     pct_hi, pct_lo = pct_from_window_extrema(closes, 252)
 
-    fundamentals = get_fundamentals(si.symbol)
+    inst_type, fundamentals = get_fundamentals(si.symbol)
     news_items = fetch_news_api([si.symbol], limit=opt.news_limit) if opt.include_news else []
     nxt = next_earnings_date(si.symbol) if opt.include_events else None
 
@@ -46,7 +46,7 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
         dates=dates, closes=closes, returns=srets, cum_return=cum_ret, volatility=vol,
         beta_vs_spy=beta, max_drawdown=dd, rsi14=rsi14, sma20=s20, sma50=s50, sma200=s200,
         pct_from_52w_high=pct_hi, pct_from_52w_low=pct_lo,
-        fundamentals=fundamentals, news_items=news_items, next_earnings=nxt
+        fundamentals=fundamentals, news_items=news_items, next_earnings=nxt, instrument_type=inst_type
     )
 
     prompt = build_stock_prompt(si.symbol, si.timeframe_label, metrics)

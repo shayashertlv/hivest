@@ -1,10 +1,22 @@
 import traceback
+import json
+import os
+import sys
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from .portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
-from .portfolio_analysis.processing.models import PortfolioInput, AnalysisOptions
-from .portfolio_analysis.llm.prompts import build_portfolio_prompt
-from .shared.llm_client import make_llm
+
+# Ensure package imports work when running this file directly (python hivest\api.py)
+if __package__ is None or __package__ == "":
+    # Add the project root (parent of this file's directory) to sys.path
+    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from hivest.portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
+from hivest.portfolio_analysis.processing.models import PortfolioInput, AnalysisOptions
+from hivest.portfolio_analysis.llm.prompts import build_portfolio_prompt
+from hivest.stock_analysis.processing.models import StockInput
+from hivest.stock_analysis.processing.engine import analyze_stock
+from hivest.stock_analysis.llm.prompts import build_stock_json_prompt
+from hivest.shared.llm_client import make_llm
 
 app = Flask(__name__)
 # Enable CORS for all routes
@@ -88,6 +100,38 @@ def analyze():
         print(f"An unexpected error occurred: {e}")
         traceback.print_exc()
         return jsonify({"error": "An internal server error occurred during analysis."}), 500
+
+
+@app.route('/stock-analysis', methods=['GET'])
+def stock_analysis():
+    """Return AI JSON analysis for a single stock symbol via Ollama."""
+    symbol = request.args.get('symbol', type=str)
+    if not symbol or not isinstance(symbol, str) or not symbol.strip():
+        return jsonify({"error": "Missing required 'symbol' query parameter."}), 400
+
+    try:
+        si = StockInput(symbol=symbol.strip().upper())
+        report = analyze_stock(si)
+        metrics = report.metrics
+
+        prompt = build_stock_json_prompt(si.symbol, metrics)
+        llm = make_llm("llama3:8b")
+        raw = llm(prompt)
+
+        try:
+            data = json.loads(raw)
+        except Exception as ex:
+            return jsonify({
+                "error": "LLM returned invalid JSON.",
+                "details": str(ex),
+                "raw": raw
+            }), 502
+
+        return jsonify(data)
+    except Exception as e:
+        print(f"[stock-analysis] Unexpected error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": "An internal server error occurred during stock analysis."}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

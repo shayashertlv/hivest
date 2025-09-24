@@ -37,6 +37,7 @@ class StockMetrics:
     fundamentals: Dict[str, float] = field(default_factory=dict)
     news_items: List[Dict] = field(default_factory=list)
     next_earnings: Optional[str] = None
+    instrument_type: str = "stock"
 
 @dataclass
 class StockReport:
