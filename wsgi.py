@@ -17,32 +17,33 @@ PARENT_DIR = CURRENT_DIR.parent
 if str(PARENT_DIR) not in sys.path:
     sys.path.insert(0, str(PARENT_DIR))
 
-# Import the Flask app robustly without assuming the top-level package name is known
+# ... (other code)
 try:
     # If this module is imported as part of the 'hivest' package
-    from .api import app as application  # type: ignore
+    # CHANGE THIS LINE: point to api_openrouter instead of api
+    from .api_openrouter import app as application  # type: ignore
 except Exception:
-    # Fallback: load api.py as 'hivest.api' and create a lightweight 'hivest' namespace package
+    # Fallback: load api_openrouter.py as 'hivest.api_openrouter'
     import importlib.util
     import types
 
     pkg_name = "hivest"
 
-    # Ensure the directory containing api.py is on sys.path
+    # Ensure the directory containing api_openrouter.py is on sys.path
     if str(CURRENT_DIR) not in sys.path:
         sys.path.insert(0, str(CURRENT_DIR))
 
-    # Create a pseudo package 'hivest' that points to CURRENT_DIR so relative imports in api.py resolve
+    # Create a pseudo package 'hivest'
     if pkg_name not in sys.modules:
         pkg = types.ModuleType(pkg_name)
         pkg.__path__ = [str(CURRENT_DIR)]  # type: ignore[attr-defined]
         sys.modules[pkg_name] = pkg
 
-    api_path = CURRENT_DIR / "api.py"
-    spec = importlib.util.spec_from_file_location(f"{pkg_name}.api", api_path)
+    api_path = CURRENT_DIR / "api_openrouter.py" # CHANGE THIS LINE
+    spec = importlib.util.spec_from_file_location(f"{pkg_name}.api_openrouter", api_path) # CHANGE THIS LINE
     if spec is None or spec.loader is None:
         raise
     api = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = api
     spec.loader.exec_module(api)
-    application = api.app  # gunicorn expects `application` by default
+    application = api.app
