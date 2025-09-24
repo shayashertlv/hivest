@@ -96,7 +96,13 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
     if inst == "etf":
         schema = (
             '{\n'
-            '  "aiConvictionScore": "number (0-100)",\n'
+            '  "analystRating": {\n'
+            '    "rating": "string (e.g., \"Strong Buy\", \"Buy\", \"Hold\", \"Reduce\", \"Sell\")",\n'
+            '    "score": "number (0-100)",\n'
+            '    "trend": "string (e.g., \"Improving\", \"Stable\", \"Waning\")",\n'
+            '    "rationale": "string (A concise, one-sentence explanation for the rating and trend.)"\n'
+            '  },\n'
+            '  "investorTakeaway": "string (The single most important, bottom-line insight for an investor. This should be the \'so what?\' of the entire analysis, delivered in a powerful, memorable sentence.)",\n'
             '  "plainEnglishSummary": "string",\n'
             '  "keyDrivers": {\n'
             '    "strength": "string",\n'
@@ -132,7 +138,13 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
     else:
         schema = (
             '{\n'
-            '  "aiConvictionScore": "number (0-100)",\n'
+            '  "analystRating": {\n'
+            '    "rating": "string (e.g., \"Strong Buy\", \"Buy\", \"Hold\", \"Reduce\", \"Sell\")",\n'
+            '    "score": "number (0-100)",\n'
+            '    "trend": "string (e.g., \"Improving\", \"Stable\", \"Waning\")",\n'
+            '    "rationale": "string (A concise, one-sentence explanation for the rating and trend.)"\n'
+            '  },\n'
+            '  "investorTakeaway": "string (The single most important, bottom-line insight for an investor. This should be the \'so what?\' of the entire analysis, delivered in a powerful, memorable sentence.)",\n'
             '  "plainEnglishSummary": "string",\n'
             '  "keyDrivers": {\n'
             '    "strength": "string",\n'
@@ -171,12 +183,15 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
     )
 
     instruction = (
-        anti_hallucination + "\n" +
+        "You are a pragmatic, data-driven investment analyst with a focus on growth-at-a-reasonable-price (GARP). Your tone is insightful, confident, and slightly skeptical. You prioritize strong fundamentals and clear catalysts over speculative hype. Your primary directive is to synthesize the provided data into a compelling, narrative-driven analysis for a retail investor.\n"
+        + anti_hallucination + "\n"
         "CRITICAL OUTPUT RULES: Return ONLY a raw JSON object exactly matching the required keys.\n"
         "- Do NOT wrap in Markdown or backticks.\n"
         "- Do NOT include any preface, explanation, or notes.\n"
         "- Base all assessments on the provided numbers and headlines; if data is missing, make conservative, clearly-labeled estimates.\n"
-        "- Keep all values within reasonable bounds. aiConvictionScore must be a number 0-100.\n"
+        "- Keep all values within reasonable bounds. analystRating.score must be a number 0-100.\n"
+        "- For analystRating, synthesize all available data—fundamentals, technicals, and sentiment—to generate a holistic rating. The trend should reflect whether the outlook is improving or deteriorating based on recent news and performance. The rationale must be a tight summary of your reasoning.\n"
+        "- For investorTakeaway, distill the entire analysis into one definitive statement. This is your expert conclusion. It should be opinionated but fair, directly answering: 'Why should I, the investor, care about this stock right now?'\n"
         + guidance_extra + "\n"
     )
 

@@ -32,7 +32,7 @@ def _norm_syms(symbols: Iterable[str]) -> list[str]:
 
 def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
     """
-    Try GNews (https://gnews.io) using env key.
+    Fetch stock news from Financial Modeling Prep (FMP) only.
     Falls back to [] if not configured or reachable.
 
     Output shape: [{source, title, url, publishedAt, symbol}]
@@ -41,43 +41,49 @@ def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
     if not syms:
         return []
 
-    out: list[dict] = []
-    gnews_key = os.getenv("GNEWS_FREE_API_KEY", "").strip()
+    fmp = (os.getenv("FMP_FREE_API_KEY") or "").strip()
+    if not fmp:
+        return []
 
     session = requests.Session()
     session.headers.update({"User-Agent": "hivest-news/1.0"})
 
-    # ---- 1) GNews (simple query per symbol)
-    if gnews_key:
-        for sym in syms:
-            try:
-                r = session.get(
-                    "https://gnews.io/api/v4/search",
-                    params={"q": sym, "token": gnews_key, "lang": "en", "max": min(5, limit)},
-                    timeout=7,
-                )
-                if r.ok:
-                    for a in (r.json().get("articles") or [])[:limit]:
-                        out.append({
-                            "source": (a.get("source") or {}).get("name") or "GNews",
-                            "title": a.get("title") or "",
-                            "url": a.get("url") or "",
-                            "publishedAt": a.get("publishedAt") or "",
-                            "symbol": sym,
-                        })
-            except Exception:
-                pass
-        if out:
-            return out[:limit]
+    # FMP stock news supports batching via comma-separated tickers.
+    tickers = ",".join(sorted(set(syms)))
+    # Request enough items to have a few per symbol; cap at 50 (FMP common default max)
+    api_limit = min(50, max(limit, min(5, limit) * len(syms)))
 
+    try:
+        r = session.get(
+            "https://financialmodelingprep.com/api/v3/stock_news",
+            params={"tickers": tickers, "limit": api_limit, "apikey": fmp},
+            timeout=7,
+        )
+        if r.ok and isinstance(r.json(), list):
+            out: list[dict] = []
+            for a in r.json():
+                sym = (a.get("symbol") or "").upper()
+                if sym and sym not in syms:
+                    # If FMP returns items outside requested set (unlikely), skip.
+                    continue
+                out.append({
+                    "source": a.get("site") or "FMP News",
+                    "title": a.get("title") or "",
+                    "url": a.get("url") or "",
+                    "publishedAt": a.get("publishedDate") or "",
+                    "symbol": sym,
+                })
+            return out[: max(0, limit * len(syms)) or limit]
+    except Exception:
+        pass
 
-    # Nothing configured / reachable
+    # API not reachable or unexpected response
     return []
 
 def get_news_for_holdings(holdings: list[dict], limit: int = 10) -> list[dict]:
     """
     Preferred entry point:
-    1) Try web news (GNews) for the portfolio symbols.
+    1) Try web news via FMP for the portfolio symbols.
     2) If none available, fallback to local Ollama-based one-liners via build_position_brief().
 
     When trimming to `limit`, interleave items by symbol (round-robin) to avoid
