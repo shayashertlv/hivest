@@ -1,6 +1,7 @@
 import traceback
 import json
 import os
+import re
 import sys
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -119,7 +120,9 @@ def stock_analysis():
         raw = llm(prompt)
 
         try:
+            fixed_raw = re.sub(r'(?<="})\s*\n\s*(?=")', '},\n', raw)
             data = json.loads(raw)
+
         except Exception as ex:
             return jsonify({
                 "error": "LLM returned invalid JSON.",
