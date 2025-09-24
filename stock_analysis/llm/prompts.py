@@ -58,6 +58,29 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
             fund_pairs.append(f"{k}={v}")
     fund_line = ", ".join(fund_pairs) if fund_pairs else "none"
 
+    # If ETF, inject expense ratio into fundamentals line
+    if inst == "etf" and getattr(metrics, "etf_profile", None) is not None:
+        er = getattr(metrics.etf_profile, "expense_ratio", None)
+        if er is not None:
+            er_str = f"expense_ratio={float(er):.4g}"
+            fund_line = er_str if fund_line == "none" else f"{fund_line}, {er_str}"
+
+    # Prepare Top 5 holdings block for ETFs
+    holdings_block = None
+    if inst == "etf" and getattr(metrics, "etf_profile", None) is not None:
+        top = list(getattr(metrics.etf_profile, "top_holdings", []) or [])
+        lines = []
+        for it in top[:5]:
+            symb = str((it.get("symbol") if isinstance(it, dict) else "") or "").strip()
+            w = it.get("weight") if isinstance(it, dict) else None
+            try:
+                if w is not None:
+                    pct = float(w) * 100.0
+                    lines.append(f"- {symb} ({pct:.2f}%)")
+            except Exception:
+                continue
+        holdings_block = "\n".join(lines) if lines else "none"
+
     news_lines = []
     for it in (metrics.news_items or [])[:5]:
         title = (it.get("title") or "").strip()
@@ -157,6 +180,10 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
         + guidance_extra + "\n"
     )
 
+    holdings_section = ""
+    if inst == "etf":
+        holdings_section = f"Top5Holdings:\n{holdings_block}\n"
+
     context = (
         f"Generated: {dt_now}\n"
         f"Symbol: {symbol.upper()}\n"
@@ -164,6 +191,7 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
         f"Performance: {perf}\n"
         f"Technicals: {tech}\n"
         f"Fundamentals: {fund_line}\n"
+        f"{holdings_section}"
         f"NextEarnings: {nxt}\n"
         f"RecentNews:\n{news_block}\n"
     )

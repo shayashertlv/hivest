@@ -1,6 +1,6 @@
 """hivest/shared/fundamentals.py"""
 import os, requests, datetime as _dt
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
 
 def _session():
@@ -9,16 +9,18 @@ def _session():
     return s
 
 
-def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float]]:
+def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float], Dict[str, Any]]:
     """
     Try FMP first, optionally Alpha Vantage later.
-    Returns a tuple: (instrument_type, fundamentals_dict)
+    Returns a tuple: (instrument_type, fundamentals_dict, etf_profile_dict)
       - instrument_type: "stock" or "etf" (defaults to "stock" on error/unknown)
       - fundamentals_dict: e.g., {'pe_ttm': float, 'market_cap': float, 'price': float, 'rev_cagr': float}
+      - etf_profile_dict (only for ETFs): {'expense_ratio': float|None, 'top_holdings': [{'symbol': str, 'weight': float}, ...]}
     Missing values are simply omitted.
     """
     sym = symbol.upper().strip()
     out: Dict[str, float] = {}
+    etf_data: Dict[str, Any] = {}
     inst_type: str = "stock"
     sess = _session()
 
@@ -36,7 +38,7 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float]]:
         except Exception:
             pass
 
-        # Fetch profile to determine instrument type (ETF vs stock)
+        # Fetch profile to determine instrument type (ETF vs stock) and expense ratio for ETFs
         try:
             r = sess.get(f"https://financialmodelingprep.com/api/v3/profile/{sym}",
                          params={"apikey": fmp}, timeout=7)
@@ -53,6 +55,13 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float]]:
                     is_etf = is_etf_val.strip().lower() in {"true", "1", "yes", "y"}
                 if is_etf:
                     inst_type = "etf"
+                    # Expense ratio is available on profile as 'expenseRatio'
+                    er = p.get("expenseRatio")
+                    try:
+                        if er is not None:
+                            etf_data["expense_ratio"] = float(er)
+                    except Exception:
+                        pass
         except Exception:
             # Default to stock on any profile error
             pass
@@ -70,6 +79,40 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float]]:
                         out["rev_cagr"] = (revs[0] / revs[-1]) ** (1 / years) - 1.0
             except Exception:
                 pass
+        else:
+            # ETF-specific: fetch top holdings
+            try:
+                r = sess.get(f"https://financialmodelingprep.com/api/v3/etf-holder/{sym}",
+                             params={"apikey": fmp}, timeout=7)
+                if r.ok and isinstance(r.json(), list):
+                    rows = r.json()[:5]
+                    holdings = []
+                    for it in rows:
+                        symb = (it.get("asset") or it.get("symbol") or it.get("holdingSymbol") or it.get("name") or "").strip()
+                        w_raw = it.get("weightPercentage")
+                        if w_raw is None:
+                            w_raw = it.get("weight")
+                        if w_raw is None:
+                            w_raw = it.get("holdingWeight")
+                        weight = None
+                        try:
+                            if isinstance(w_raw, str):
+                                w_clean = w_raw.replace("%", "").strip()
+                                weight_val = float(w_clean)
+                            elif isinstance(w_raw, (int, float)):
+                                weight_val = float(w_raw)
+                            else:
+                                weight_val = None
+                            if weight_val is not None:
+                                # Convert to fraction if looks like percent
+                                weight = weight_val/100.0 if weight_val > 1 else weight_val
+                        except Exception:
+                            weight = None
+                        if symb and (weight is not None):
+                            holdings.append({"symbol": symb, "weight": weight})
+                    etf_data["top_holdings"] = holdings
+            except Exception:
+                pass
 
     # Alpha Vantage optional extension later (respect free-tier limits)
-    return inst_type, out
+    return inst_type, out, etf_data

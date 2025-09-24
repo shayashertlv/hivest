@@ -1,5 +1,11 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
+
+@dataclass
+class EtfProfile:
+    expense_ratio: Optional[float] = None
+    top_holdings: List[Dict[str, Any]] = field(default_factory=list)
+    # Add other relevant ETF fields here in the future
 
 @dataclass
 class StockInput:
@@ -38,6 +44,7 @@ class StockMetrics:
     news_items: List[Dict] = field(default_factory=list)
     next_earnings: Optional[str] = None
     instrument_type: str = "stock"
+    etf_profile: Optional[EtfProfile] = None
 
 @dataclass
 class StockReport:
