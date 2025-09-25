@@ -10,7 +10,7 @@ from ...shared.news import fetch_news_api
 from ...shared.events import next_earnings_date
 from ..llm.prompts import build_stock_json_prompt
 from ...shared.llm_client import make_llm
-
+import json
 
 def _load_series(symbol: str, tf_label: str):
     yf_range = infer_yahoo_range(tf_label)
@@ -38,35 +38,51 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
     s20, s50, s200 = sma(closes, 20), sma(closes, 50), sma(closes, 200)
     pct_hi, pct_lo = pct_from_window_extrema(closes, 252)
 
-    # Compute absolute 52-week high/low for support/resistance levels
     window_52w = closes[-252:] if len(closes) >= 252 else closes
     high_52w = max(window_52w) if window_52w else (closes[-1] if closes else 0.0)
     low_52w = min(window_52w) if window_52w else (closes[-1] if closes else 0.0)
 
+    # --- Start of Corrected Section ---
+    # Fetch all data first
     inst_type, fundamentals, etf_profile_data = get_fundamentals(si.symbol)
     social_sentiment_data = fundamentals.pop("social_sentiment", None)
+
     news_items = fetch_news_api([si.symbol], limit=opt.news_limit) if opt.include_news else []
+    market_news_items = fetch_news_api(['SPY'], limit=3) if opt.include_news else []
     nxt = next_earnings_date(si.symbol) if opt.include_events else None
 
     etf_profile = EtfProfile(**etf_profile_data) if inst_type == "etf" and isinstance(etf_profile_data, dict) else None
 
+    # Now, create the metrics object with all the defined variables
     metrics = StockMetrics(
         dates=dates, closes=closes, returns=srets, cum_return=cum_ret, volatility=vol,
         beta_vs_spy=beta, max_drawdown=dd, rsi14=rsi14, sma20=s20, sma50=s50, sma200=s200,
         pct_from_52w_high=pct_hi, pct_from_52w_low=pct_lo,
-        # Newly added absolute levels to prevent nulls in prompt usage
         high_52w=high_52w,
         low_52w=low_52w,
         last_close=closes[-1] if closes else 0.0,
         fundamentals=fundamentals,
         social_sentiment=social_sentiment_data,
-        news_items=news_items, next_earnings=nxt, instrument_type=inst_type,
+        news_items=news_items,
+        market_news_items=market_news_items,
+        next_earnings=nxt,
+        instrument_type=inst_type,
         etf_profile=etf_profile
     )
+    # --- End of Corrected Section ---
 
     prompt = build_stock_json_prompt(si.symbol, metrics)
     llm = make_llm(opt.llm_model, opt.llm_host)
-    narrative = (llm(prompt) or "").strip() if callable(llm) else _fallback(metrics)
+
+    # This line was also referencing an old function, correcting it.
+    raw_json = (llm(prompt) or "").strip()
+
+    # A simple fallback for the narrative part
+    try:
+        narrative = json.loads(raw_json)
+    except json.JSONDecodeError:
+        narrative = {"error": "Failed to generate valid analysis."}
+
     return StockReport(metrics=metrics, narrative=narrative)
 
 

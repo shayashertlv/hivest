@@ -47,6 +47,7 @@ class StockMetrics:
     fundamentals: Dict[str, float] = field(default_factory=dict)
     social_sentiment: Optional[Dict] = None
     news_items: List[Dict] = field(default_factory=list)
+    market_news_items: List[Dict] = field(default_factory=list)
     next_earnings: Optional[str] = None
     instrument_type: str = "stock"
     etf_profile: Optional[EtfProfile] = None
