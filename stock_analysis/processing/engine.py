@@ -8,7 +8,7 @@ from ...shared.risk import compute_beta, compute_volatility, compute_drawdown_st
 from ...shared.fundamentals import get_fundamentals
 from ...shared.news import fetch_news_api
 from ...shared.events import next_earnings_date
-from ..llm.prompts import build_stock_prompt
+from ..llm.prompts import build_stock_json_prompt
 from ...shared.llm_client import make_llm
 
 
@@ -44,6 +44,7 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
     low_52w = min(window_52w) if window_52w else (closes[-1] if closes else 0.0)
 
     inst_type, fundamentals, etf_profile_data = get_fundamentals(si.symbol)
+    social_sentiment_data = fundamentals.pop("social_sentiment", None)
     news_items = fetch_news_api([si.symbol], limit=opt.news_limit) if opt.include_news else []
     nxt = next_earnings_date(si.symbol) if opt.include_events else None
 
@@ -57,11 +58,13 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
         high_52w=high_52w,
         low_52w=low_52w,
         last_close=closes[-1] if closes else 0.0,
-        fundamentals=fundamentals, news_items=news_items, next_earnings=nxt, instrument_type=inst_type,
+        fundamentals=fundamentals,
+        social_sentiment=social_sentiment_data,
+        news_items=news_items, next_earnings=nxt, instrument_type=inst_type,
         etf_profile=etf_profile
     )
 
-    prompt = build_stock_prompt(si.symbol, si.timeframe_label, metrics)
+    prompt = build_stock_json_prompt(si.symbol, metrics)
     llm = make_llm(opt.llm_model, opt.llm_host)
     narrative = (llm(prompt) or "").strip() if callable(llm) else _fallback(metrics)
     return StockReport(metrics=metrics, narrative=narrative)

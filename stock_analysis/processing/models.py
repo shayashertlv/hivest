@@ -45,6 +45,7 @@ class StockMetrics:
     low_52w: float = 0.0
     last_close: float = 0.0
     fundamentals: Dict[str, float] = field(default_factory=dict)
+    social_sentiment: Optional[Dict] = None
     news_items: List[Dict] = field(default_factory=list)
     next_earnings: Optional[str] = None
     instrument_type: str = "stock"

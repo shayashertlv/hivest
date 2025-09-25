@@ -1,5 +1,6 @@
 """hivest/shared/fundamentals.py"""
-import os, requests, datetime as _dt
+import os
+import requests
 from typing import Dict, Tuple, Any
 
 
@@ -9,146 +10,95 @@ def _session():
     return s
 
 
-"""hivest/shared/fundamentals.py"""
-import os, requests, datetime as _dt
-from typing import Dict, Tuple, Any
-
-
-def _session():
-    s = requests.Session()
-    s.headers.update({"User-Agent": "hivest-shared/1.0"})
-    return s
-
-
-def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float], Dict[str, Any]]:
+def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
     """
-    Try FMP first, optionally Alpha Vantage later.
+    Fetches fundamental, social sentiment, and analyst estimate data from FMP.
     Returns a tuple: (instrument_type, fundamentals_dict, etf_profile_dict)
-      - instrument_type: "stock" or "etf" (defaults to "stock" on error/unknown)
-      - fundamentals_dict: e.g., {'pe_ttm': float, 'market_cap': float, 'price': float, 'rev_cagr': float}
-      - etf_profile_dict (only for ETFs): {'expense_ratio': float|None, 'top_holdings': [{'symbol': str, 'weight': float}, ...]}
-    Missing values are simply omitted.
     """
     sym = symbol.upper().strip()
-    out: Dict[str, float] = {}
+    out: Dict[str, Any] = {}
     etf_data: Dict[str, Any] = {}
     inst_type: str = "stock"
     sess = _session()
-
     fmp = (os.getenv("FMP_FREE_API_KEY") or "").strip()
-    if fmp:
-        # Fetch real-time quote first (used for both stocks and ETFs)
+
+    if not fmp:
+        return inst_type, out, etf_data
+
+    # --- Step 1: Fetch Profile (to determine instrument type) ---
+    try:
+        r = sess.get(f"https://financialmodelingprep.com/api/v3/profile/{sym}", params={"apikey": fmp}, timeout=7)
+        if r.ok and isinstance(r.json(), list) and r.json():
+            profile = r.json()[0]
+            if profile.get("isEtf"):
+                inst_type = "etf"
+                if profile.get("expenseRatio") is not None:
+                    etf_data["expense_ratio"] = float(profile["expenseRatio"])
+            
+            # Get Price, PE, MktCap from Profile to reduce API calls
+            if profile.get("price") is not None: out["price"] = float(profile["price"])
+            if profile.get("mktCap") is not None: out["market_cap"] = float(profile["mktCap"])
+            # FMP does not provide PE on profile, so we'll get it from quotes if needed later
+    except Exception:
+        pass
+
+    if inst_type == "stock":
+        # --- Step 2: Fetch Financial Statements for Stocks ---
         try:
-            r = sess.get(f"https://financialmodelingprep.com/api/v3/quote/{sym}",
-                         params={"apikey": fmp}, timeout=7)
-            if r.ok and isinstance(r.json(), list) and r.json():
-                q = r.json()[0]
-                if q.get("pe") is not None: out["pe_ttm"] = float(q["pe"])
-                if q.get("price") is not None: out["price"] = float(q["price"])
-                if q.get("marketCap") is not None: out["market_cap"] = float(q["marketCap"])
-                if q.get("eps") is not None: out["eps"] = float(q["eps"])
+            r = sess.get(f"https://financialmodelingprep.com/api/v3/income-statement/{sym}", params={"period": "annual", "limit": 2, "apikey": fmp}, timeout=7)
+            if r.ok and r.json():
+                rows = r.json()
+                # Get TTM PE from Key Metrics if not available on quote
+                r_metrics = sess.get(f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{sym}", params={"apikey": fmp}, timeout=7)
+                if r_metrics.ok and r_metrics.json():
+                    out['pe_ttm'] = r_metrics.json()[0].get('peRatioTTM')
+
+                eps_list = [float(x["eps"]) for x in rows if x.get("eps") is not None]
+                if len(eps_list) >= 2: out["epsGrowthYoY"] = (eps_list[0] / eps_list[1]) - 1.0 if eps_list[1] else None
+
+                if rows[0].get("grossProfitRatio") is not None:
+                    out["grossMargin"] = rows[0].get("grossProfitRatio")
+
         except Exception:
             pass
 
-        # Fetch profile to determine instrument type (ETF vs stock) and expense ratio for ETFs
         try:
-            r = sess.get(f"https://financialmodelingprep.com/api/v3/profile/{sym}",
-                         params={"apikey": fmp}, timeout=7)
-            if r.ok and isinstance(r.json(), list) and r.json():
-                p = r.json()[0]
-                is_etf_val = p.get("isEtf")
-                # Normalize possible string/number/boolean representations
-                is_etf = False
-                if isinstance(is_etf_val, bool):
-                    is_etf = is_etf_val
-                elif isinstance(is_etf_val, (int, float)):
-                    is_etf = bool(is_etf_val)
-                elif isinstance(is_etf_val, str):
-                    is_etf = is_etf_val.strip().lower() in {"true", "1", "yes", "y"}
-                if is_etf:
-                    inst_type = "etf"
-                    # Expense ratio is available on profile as 'expenseRatio'
-                    er = p.get("expenseRatio")
-                    try:
-                        if er is not None:
-                            etf_data["expense_ratio"] = float(er)
-                    except Exception:
-                        pass
+            r = sess.get(f"https://financialmodelingprep.com/api/v3/balance-sheet-statement/{sym}", params={"period": "annual", "limit": 1, "apikey": fmp}, timeout=7)
+            if r.ok and r.json():
+                bs = r.json()[0]
+                if bs.get("debtToEquity") is not None:
+                    out["debtToEquity"] = bs.get("debtToEquity")
         except Exception:
-            # Default to stock on any profile error
             pass
 
-        # For stocks, attempt to compute revenue CAGR from income statements
-        if inst_type == "stock":
-            try:
-                r = sess.get(f"https://financialmodelingprep.com/api/v3/income-statement/{sym}",
-                             params={"limit": 8, "apikey": fmp}, timeout=7) # <-- Changed limit to 8
-                if r.ok and isinstance(r.json(), list) and r.json():
-                    rows = r.json()
-                    revs = [float(x["revenue"]) for x in rows if x.get("revenue") is not None]
-                    if len(revs) >= 2 and revs[0] and revs[-1]:
-                        years = max(1, len(revs) - 1)
-                        out["rev_cagr"] = (revs[0] / revs[-1]) ** (1 / years) - 1.0
+        # --- Step 3: Fetch Social Sentiment ---
+        try:
+            r = sess.get(f"https://financialmodelingprep.com/api/v4/social-sentiment", params={"symbol": sym, "apikey": fmp}, timeout=7)
+            if r.ok and r.json():
+                social_data = r.json()
+                if isinstance(social_data, list) and social_data:
+                    # If the API returns a list, take the first item
+                    out["social_sentiment"] = social_data[0]
+                else:
+                    out["social_sentiment"] = social_data
+        except Exception:
+            pass
+            
+        # --- Step 4: Fetch Analyst Price Targets ---
+        try:
+            r = sess.get(f"https://financialmodelingprep.com/api/v3/analyst-estimates/{sym}", params={"apikey": fmp}, timeout=7)
+            if r.ok and isinstance(r.json(), list) and r.json():
+                out["analyst_target_price"] = r.json()[0].get("estimatedPriceAvg")
+        except Exception:
+            pass
 
-                    # --- START of the new code ---
-                    # Calculate EPS Growth (YoY)
-                    eps_list = [float(x["eps"]) for x in rows if x.get("eps") is not None]
-                    if len(eps_list) >= 5: # 4 quarters in a year
-                        out["epsGrowthYoY"] = (eps_list[0] / eps_list[4]) - 1.0
-
-                    # Calculate Gross Margin
-                    if rows[0].get("grossProfit") is not None and rows[0].get("revenue") is not None:
-                        out["grossMargin"] = rows[0]["grossProfit"] / rows[0]["revenue"]
-                    # --- END of the new code ---
-            except Exception:
-                pass
-
-
-            # Fetch Balance Sheet data for Debt-to-Equity Ratio
-            try:
-                r = sess.get(f"https://financialmodelingprep.com/api/v3/balance-sheet-statement/{sym}",
-                             params={"limit": 1, "apikey": fmp}, timeout=7)
-                if r.ok and isinstance(r.json(), list) and r.json():
-                    bs = r.json()[0]
-                    if bs.get("totalDebt") is not None and bs.get("totalStockholdersEquity") is not None:
-                        out["debtToEquity"] = bs["totalDebt"] / bs["totalStockholdersEquity"]
-            except Exception:
-                pass
-
-        else:
-            # ETF-specific: fetch top holdings
-            try:
-                r = sess.get(f"https://financialmodelingprep.com/api/v3/etf-holder/{sym}",
-                             params={"apikey": fmp}, timeout=7)
-                if r.ok and isinstance(r.json(), list):
-                    rows = r.json()[:5]
-                    holdings = []
-                    for it in rows:
-                        symb = (it.get("asset") or it.get("symbol") or it.get("holdingSymbol") or it.get("name") or "").strip()
-                        w_raw = it.get("weightPercentage")
-                        if w_raw is None:
-                            w_raw = it.get("weight")
-                        if w_raw is None:
-                            w_raw = it.get("holdingWeight")
-                        weight = None
-                        try:
-                            if isinstance(w_raw, str):
-                                w_clean = w_raw.replace("%", "").strip()
-                                weight_val = float(w_clean)
-                            elif isinstance(w_raw, (int, float)):
-                                weight_val = float(w_raw)
-                            else:
-                                weight_val = None
-                            if weight_val is not None:
-                                # Convert to fraction if looks like percent
-                                weight = weight_val/100.0 if weight_val > 1 else weight_val
-                        except Exception:
-                            weight = None
-                        if symb and (weight is not None):
-                            holdings.append({"symbol": symb, "weight": weight})
-                    etf_data["top_holdings"] = holdings
-            except Exception:
-                pass
-
-    # Alpha Vantage optional extension later (respect free-tier limits)
+    else:  # Instrument is ETF
+        # --- Step 5: Fetch ETF Holdings ---
+        try:
+            r = sess.get(f"https://financialmodelingprep.com/api/v3/etf-holder/{sym}", params={"apikey": fmp}, timeout=7)
+            if r.ok and isinstance(r.json(), list) and r.json():
+                etf_data["top_holdings"] = [{"symbol": h.get("asset"), "weight": h.get("weightPercentage")} for h in r.json()[:5]]
+        except Exception:
+            pass
+            
     return inst_type, out, etf_data
