@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -120,8 +121,8 @@ def stock_analysis():
         raw = llm(prompt)
 
         try:
-            fixed_raw = re.sub(r'(?<="})\s*\n\s*(?=")', '},\n', raw)
-            data = json.loads(raw)
+            fixed_raw = re.sub(r'(?<="|})\s*\n\s*(?=")', ',\n', raw)
+            data = json.loads(fixed_raw)
 
         except Exception as ex:
             return jsonify({
@@ -131,6 +132,16 @@ def stock_analysis():
             }), 502
 
         return jsonify(data)
+
+    except (requests.exceptions.RequestException, RuntimeError) as e:
+        # This will catch connection errors from the LLM client
+        # and the RuntimeError it raises after retries fail.
+        print(f"[stock-analysis] LLM connection error: {e}")
+        return jsonify({
+            "error": "Could not connect to the LLM service.",
+            "details": "Please ensure the Ollama server is running and accessible."
+        }), 502
+
     except Exception as e:
         print(f"[stock-analysis] Unexpected error: {e}")
         traceback.print_exc()

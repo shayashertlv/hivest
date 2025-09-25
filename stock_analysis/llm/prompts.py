@@ -43,7 +43,7 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
     # Compact context lines for the model to ground on real numbers
     tech = (
         f"RSI14={metrics.rsi14:.1f}; "
-        f"SMA20={metrics.sma20:.2f}; SMA50={metrics.sma50:.2f}; SMA200={metrics.sma200:.2f}; "
+        f"last_close={metrics.last_close:.2f}; support1={metrics.low_52w:.2f}; resistance1={metrics.high_52w:.2f}; support2_sma50={metrics.sma50:.2f}; "
         f"pct_from_52w_high={metrics.pct_from_52w_high*100:.2f}%; pct_from_52w_low={metrics.pct_from_52w_low*100:.2f}%"
     )
     perf = (
@@ -190,6 +190,7 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
         "- Do NOT include any preface, explanation, or notes.\n"
         "- Base all assessments on the provided numbers and headlines; if data is missing, make conservative, clearly-labeled estimates.\n"
         "- Keep all values within reasonable bounds. analystRating.score must be a number 0-100.\n"
+        "- CRITICAL COMMA RULE: Every key-value pair in an object must be followed by a comma, except for the very last one. For example: \"key1\": \"value1\", \"key2\": \"value2\" is correct; missing commas is invalid JSON.\n"
         "- For analystRating, synthesize all available data—fundamentals, technicals, and sentiment—to generate a holistic rating. The trend should reflect whether the outlook is improving or deteriorating based on recent news and performance. The rationale must be a tight summary of your reasoning.\n"
         "- For investorTakeaway, distill the entire analysis into one definitive statement. This is your expert conclusion. It should be opinionated but fair, directly answering: 'Why should I, the investor, care about this stock right now?'\n"
         + guidance_extra + "\n"

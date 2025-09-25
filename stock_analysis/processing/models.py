@@ -40,6 +40,10 @@ class StockMetrics:
     sma200: float = 0.0
     pct_from_52w_high: float = 0.0
     pct_from_52w_low: float = 0.0
+    # Added absolute levels and last close for use in prompts/analysis
+    high_52w: float = 0.0
+    low_52w: float = 0.0
+    last_close: float = 0.0
     fundamentals: Dict[str, float] = field(default_factory=dict)
     news_items: List[Dict] = field(default_factory=list)
     next_earnings: Optional[str] = None

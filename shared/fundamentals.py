@@ -9,6 +9,17 @@ def _session():
     return s
 
 
+"""hivest/shared/fundamentals.py"""
+import os, requests, datetime as _dt
+from typing import Dict, Tuple, Any
+
+
+def _session():
+    s = requests.Session()
+    s.headers.update({"User-Agent": "hivest-shared/1.0"})
+    return s
+
+
 def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float], Dict[str, Any]]:
     """
     Try FMP first, optionally Alpha Vantage later.
@@ -35,6 +46,7 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float], Dict[str, Any]
                 if q.get("pe") is not None: out["pe_ttm"] = float(q["pe"])
                 if q.get("price") is not None: out["price"] = float(q["price"])
                 if q.get("marketCap") is not None: out["market_cap"] = float(q["marketCap"])
+                if q.get("eps") is not None: out["eps"] = float(q["eps"])
         except Exception:
             pass
 
@@ -70,15 +82,39 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, float], Dict[str, Any]
         if inst_type == "stock":
             try:
                 r = sess.get(f"https://financialmodelingprep.com/api/v3/income-statement/{sym}",
-                             params={"limit": 4, "apikey": fmp}, timeout=7)
+                             params={"limit": 8, "apikey": fmp}, timeout=7) # <-- Changed limit to 8
                 if r.ok and isinstance(r.json(), list) and r.json():
                     rows = r.json()
                     revs = [float(x["revenue"]) for x in rows if x.get("revenue") is not None]
                     if len(revs) >= 2 and revs[0] and revs[-1]:
                         years = max(1, len(revs) - 1)
                         out["rev_cagr"] = (revs[0] / revs[-1]) ** (1 / years) - 1.0
+
+                    # --- START of the new code ---
+                    # Calculate EPS Growth (YoY)
+                    eps_list = [float(x["eps"]) for x in rows if x.get("eps") is not None]
+                    if len(eps_list) >= 5: # 4 quarters in a year
+                        out["epsGrowthYoY"] = (eps_list[0] / eps_list[4]) - 1.0
+
+                    # Calculate Gross Margin
+                    if rows[0].get("grossProfit") is not None and rows[0].get("revenue") is not None:
+                        out["grossMargin"] = rows[0]["grossProfit"] / rows[0]["revenue"]
+                    # --- END of the new code ---
             except Exception:
                 pass
+
+
+            # Fetch Balance Sheet data for Debt-to-Equity Ratio
+            try:
+                r = sess.get(f"https://financialmodelingprep.com/api/v3/balance-sheet-statement/{sym}",
+                             params={"limit": 1, "apikey": fmp}, timeout=7)
+                if r.ok and isinstance(r.json(), list) and r.json():
+                    bs = r.json()[0]
+                    if bs.get("totalDebt") is not None and bs.get("totalStockholdersEquity") is not None:
+                        out["debtToEquity"] = bs["totalDebt"] / bs["totalStockholdersEquity"]
+            except Exception:
+                pass
+
         else:
             # ETF-specific: fetch top holdings
             try:

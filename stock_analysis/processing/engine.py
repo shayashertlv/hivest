@@ -38,6 +38,11 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
     s20, s50, s200 = sma(closes, 20), sma(closes, 50), sma(closes, 200)
     pct_hi, pct_lo = pct_from_window_extrema(closes, 252)
 
+    # Compute absolute 52-week high/low for support/resistance levels
+    window_52w = closes[-252:] if len(closes) >= 252 else closes
+    high_52w = max(window_52w) if window_52w else (closes[-1] if closes else 0.0)
+    low_52w = min(window_52w) if window_52w else (closes[-1] if closes else 0.0)
+
     inst_type, fundamentals, etf_profile_data = get_fundamentals(si.symbol)
     news_items = fetch_news_api([si.symbol], limit=opt.news_limit) if opt.include_news else []
     nxt = next_earnings_date(si.symbol) if opt.include_events else None
@@ -48,6 +53,10 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
         dates=dates, closes=closes, returns=srets, cum_return=cum_ret, volatility=vol,
         beta_vs_spy=beta, max_drawdown=dd, rsi14=rsi14, sma20=s20, sma50=s50, sma200=s200,
         pct_from_52w_high=pct_hi, pct_from_52w_low=pct_lo,
+        # Newly added absolute levels to prevent nulls in prompt usage
+        high_52w=high_52w,
+        low_52w=low_52w,
+        last_close=closes[-1] if closes else 0.0,
         fundamentals=fundamentals, news_items=news_items, next_earnings=nxt, instrument_type=inst_type,
         etf_profile=etf_profile
     )
