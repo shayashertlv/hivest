@@ -33,9 +33,9 @@ def _norm_syms(symbols: Iterable[str]) -> list[str]:
 def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
     """
     Fetch stock news from Financial Modeling Prep (FMP) only.
-    Falls back to [] if not configured or reachable.
+    This version now also fetches full-text press releases.
 
-    Output shape: [{source, title, url, publishedAt, symbol}]
+    Output shape: [{source, title, url, publishedAt, symbol, content}]
     """
     syms = _norm_syms(symbols)
     if not syms:
@@ -48,9 +48,31 @@ def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
     session = requests.Session()
     session.headers.update({"User-Agent": "hivest-news/1.0"})
 
-    # FMP stock news supports batching via comma-separated tickers.
+    out: list[dict] = []
+
+    # 1. Fetch press releases (they have full content)
+    for symbol in syms:
+        try:
+            r = session.get(
+                f"https://financialmodelingprep.com/api/v3/press-releases/{symbol}",
+                params={"limit": limit, "apikey": fmp},
+                timeout=7,
+            )
+            if r.ok and isinstance(r.json(), list):
+                for a in r.json():
+                    out.append({
+                        "source": "Press Release",
+                        "title": a.get("title") or "",
+                        "url": f"https://financialmodelingprep.com/press-releases/{symbol}", # Placeholder URL
+                        "publishedAt": a.get("date") or "",
+                        "symbol": (a.get("symbol") or "").upper(),
+                        "content": a.get("text") or "" # Full content is in the 'text' field
+                    })
+        except Exception:
+            pass # Continue if one symbol fails
+
+    # 2. Fetch standard news (headlines and metadata)
     tickers = ",".join(sorted(set(syms)))
-    # Request enough items to have a few per symbol; cap at 50 (FMP common default max)
     api_limit = min(50, max(limit, min(5, limit) * len(syms)))
 
     try:
@@ -60,11 +82,9 @@ def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
             timeout=7,
         )
         if r.ok and isinstance(r.json(), list):
-            out: list[dict] = []
             for a in r.json():
                 sym = (a.get("symbol") or "").upper()
                 if sym and sym not in syms:
-                    # If FMP returns items outside requested set (unlikely), skip.
                     continue
                 out.append({
                     "source": a.get("site") or "FMP News",
@@ -72,13 +92,14 @@ def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
                     "url": a.get("url") or "",
                     "publishedAt": a.get("publishedDate") or "",
                     "symbol": sym,
+                    "content": a.get("text") or "" # Add content, though it's usually empty for this endpoint
                 })
-            return out[: max(0, limit * len(syms)) or limit]
     except Exception:
         pass
 
-    # API not reachable or unexpected response
-    return []
+    # Sort by date and return the most recent articles, up to the limit.
+    out.sort(key=lambda x: x.get("publishedAt", ""), reverse=True)
+    return out[: max(0, limit * len(syms)) or limit]
 
 def get_news_for_holdings(holdings: list[dict], limit: int = 10) -> list[dict]:
     """

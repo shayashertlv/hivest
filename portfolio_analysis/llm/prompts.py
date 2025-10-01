@@ -140,7 +140,8 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
         w = weights.get(sym, float(h.weight or 0.0))
         abp = h.avg_buy_price
         bat = h.bought_at or "unknown"
-        pos_lines.append(f"- {sym}: weight={w:.2%}; avg_buy_price={abp if abp is not None else 'n/a'}; bought_at={bat}")
+        name = h.name or f"{sym} (Name not provided)"
+        pos_lines.append(f"- {sym} ({name}): weight={w:.2%}; avg_buy_price={abp if abp is not None else 'n/a'}; bought_at={bat}")
     positions_block = "\n".join(pos_lines) or "n/a"
 
     winners_s = _fmt_top_list(cm.winners, 3) or "n/a"
@@ -185,11 +186,11 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
         f"warnings={'; '.join(conc.get('warnings', [])) or 'none'}"
     )
 
-    # News block (titles + sources + dates)
+    # News block (titles and content)
     nitems = news_items or []
     news_block = "\n".join(
-        f"- {it.get('symbol','')}: {it.get('title','')} [source={it.get('source','')}; date={(it.get('publishedAt','') or '')[:10]}]"
-        for it in nitems[:4]
+        f"- {it.get('symbol','')}: {it.get('title','')} [source={it.get('source','')}; date={(it.get('publishedAt','') or '')[:10]}]\nContent: {it.get('content', 'N/A')}"
+        for it in nitems
     ) or "none"
 
     include_events = bool(getattr(pi, "include_events", True))
@@ -205,18 +206,12 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
         "**Generate a JSON object with the following exact structure and mandatory keys:**\n\n"
         "1.  `portfolioScore`: (Number) A single overall quality score for the portfolio from 1 (poor) to 10 (excellent), based on a synthesis of all provided data (performance, risk, diversification).\n\n"
         "2.  `portfolioAllocation`: (Array of Objects) Detail each holding.\n"
-        "    -   Each object must have `ticker`, `companyName`, and `narrative` keys.\n"
+        "    -   Each object must have `ticker`, `companyName`, and `narrative` keys. **Use the company name provided in the data, do not invent one.**\n"
         "    -   **For the `narrative`, you must write a single, data-rich sentence.**\n"
-        "    -   **This sentence MUST integrate the holding's `weight`, its strategic role (e.g., growth engine, diversifier, value anchor), and a brief, insightful comment on its recent performance or relevant news.**\n"
-        "    -   **Crucially, AVOID starting with generic praise like 'is a key holding' or 'is a dominant player'. Let the data speak for itself and weave the narrative naturally.**\n\n"
-        "3.  `keyAdvantages`: (Array of Strings) List the portfolio's primary strengths.\n"
-        "    -   **Synthesize multiple data points to form each advantage.** Instead of 'Strong exposure to Tech', write 'The portfolio's performance is driven by a concentrated bet on the high-growth Technology sector, with AAPL and MSFT delivering significant returns.'\n\n"
-        "4.  `risksToWatch`: (Object) This object must contain two keys:\n"
-        "    -   `riskRating`: (Number) A mandatory 0-10 score indicating the portfolio's risk level (0 = very safe, 10 = highly speculative), derived from volatility, beta, drawdown, and concentration data.\n"
-        "    -   `vulnerabilities`: (Array of Strings) List the key risks. **Connect different data points.** For example: 'The 80% concentration in AAPL and MSFT, combined with a high beta, makes the portfolio highly vulnerable to tech-sector-specific downturns.' If there are no major risks, explain why the portfolio is well-positioned.\n\n"
-        "5.  `observationsAndConsiderations`: (Array of Strings) Provide neutral, actionable observations.\n"
-        "    -   **Go beyond restating risks.** Suggest specific areas for review. For example: 'Given the portfolio's reliance on AAPL's performance, an investor might evaluate adding a position in an underrepresented sector like Healthcare to improve diversification.'\n\n"
-        "6.  `bottomLine`: (String) A concise, decisive summary of the portfolio's quality and strategic balance."
+        "    -   **This sentence MUST integrate the holding's `weight`, its strategic role (e.g., growth engine, diversifier, value anchor), and a brief, insightful comment on its recent performance.**\n\n"
+        "3.  `keyDevelopments`: (Array of Strings) Provide a three-point summary of the latest, most important news impacting the portfolio. **Do not just list headlines. Synthesize the news and explain the *IMPACT* on the specific holdings.** For example, instead of 'Company X announces new chip', write 'Microsoft's plan to develop its own AI chips could pressure its current suppliers but strengthens its long-term competitive position.'\n\n"
+        "4.  `observationsAndConsiderations`: (Array of Strings) Provide neutral, actionable observations based on the provided portfolio data. **Do not use outside examples or stocks not present in the portfolio.**\n\n"
+        "5.  `bottomLine`: (String) A concise, decisive summary of the portfolio's quality and strategic balance."
     )
 
     payload = (
@@ -234,8 +229,7 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
       f"Sectors up: {sector_top_s}\n"
       f"Sectors down: {sector_bottom_s}\n"
       f"Upcoming events: \n{events_block}\n"
-      f"News (titles):\n{news_block}\n"
-      f"Flags: {flags_line}\n"
+      f"News (titles and content):\n{news_block}\n"
       f"Pre-Suggested Actions: {pre_actions}\n"
       f"Per-symbol cumulative returns: {stock_perf_block}\n"
       f"PerformanceSummaryLine: {comparison_summary_line}\n"

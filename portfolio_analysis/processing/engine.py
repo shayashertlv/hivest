@@ -42,14 +42,15 @@ def holdings_from_user_positions(positions: List[Dict[str, Any]]) -> List[Holdin
         # Fetch company name and sector via FMP profile (no yfinance)
         try:
             fmp = (os.getenv("FMP_FREE_API_KEY") or "").strip()
-            holding.name = symbol
+            holding.name = f"{symbol} (Name not found)" # Default placeholder
             holding.sector = "Unknown"
             if fmp:
                 r = requests.get(f"https://financialmodelingprep.com/api/v3/profile/{symbol}",
                                  params={"apikey": fmp}, timeout=7)
                 if r.ok and isinstance(r.json(), list) and r.json():
                     prof = r.json()[0]
-                    holding.name = prof.get("companyName") or symbol
+                    print(f"FMP Profile for {symbol}: {prof}") # Debugging line
+                    holding.name = prof.get("companyName") or f"{symbol} (Name not found)"
                     holding.sector = prof.get("sector") or "Unknown"
             print(f"Info for {symbol}: Sector='{holding.sector}', Name='{holding.name}'")
         except Exception as e:
@@ -80,7 +81,7 @@ def analyze_portfolio(pi: PortfolioInput, options: Optional[AnalysisOptions] = N
     sharpe = compute_sharpe(pi.portfolio_returns, pi.risk_free_rate)
     sortino = compute_sortino(pi.portfolio_returns)
     drawdown_stats = compute_drawdown_stats(pi.portfolio_returns)
-    
+
     # 3. Perform attribution analysis
     pos_attr = attribution_by_position(holdings_as_dicts, pi.per_symbol_returns)
     sec_attr = attribution_by_sector(holdings_as_dicts, pi.per_symbol_returns)
@@ -115,7 +116,7 @@ def analyze_portfolio(pi: PortfolioInput, options: Optional[AnalysisOptions] = N
         max_drawdown=drawdown_stats["max_drawdown"],
         calmar_like=drawdown_stats["calmar_like"]
     )
-    
+
     # This dictionary will be the context for the LLM prompt
     return {
         "portfolio_input": pi,
