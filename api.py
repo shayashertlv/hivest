@@ -24,13 +24,12 @@ app = Flask(__name__)
 # Enable CORS for all routes
 CORS(app)
 
-@app.route('/analyze', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/analyze', methods=['POST', 'OPTIONS'])
 def analyze():
     """
     This is the main API endpoint for portfolio analysis.
-    It accepts both GET and POST requests.
+    It accepts POST requests with a JSON body.
     - POST: Expects a JSON body -> {"portfolio": "AAPL:0.5 MSFT:0.3"}
-    - GET: Expects a URL query parameter -> /analyze?portfolio=AAPL:0.5%20MSFT:0.3
     """
     if request.method == 'OPTIONS':
         return jsonify(success=True), 200
@@ -40,14 +39,11 @@ def analyze():
         data = request.get_json(silent=True)
         if data and 'portfolio' in data:
             portfolio_string = data.get('portfolio')
-    elif request.method == 'GET':
-        portfolio_string = request.args.get('portfolio')
 
     if not portfolio_string or not isinstance(portfolio_string, str) or not portfolio_string.strip():
         return jsonify({
-            "error": "The 'portfolio' string is missing or empty. Please provide it in the JSON body for a POST request or as a URL parameter for a GET request.",
+            "error": "The 'portfolio' string is missing or empty. Please provide it in the JSON body of a POST request.",
             "examples": {
-                "GET": "/analyze?portfolio=AAPL:0.5%20MSFT:0.3",
                 "POST": {"portfolio": "AAPL:0.5 MSFT:0.3"}
             }
         }), 400
