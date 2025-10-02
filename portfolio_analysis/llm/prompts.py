@@ -204,10 +204,18 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
         "You are a direct, insightful senior portfolio manager. Your task is to generate a structured JSON object providing a sharp, "
         "comprehensive analysis of an investment portfolio. Your tone should be that of an experienced human analyst, avoiding generic phrasing "
         "and repetitive sentence structures. **Do not output any text, code, or explanations outside of the final JSON object.**\n\n"
+
         "Only write the conclusions. For example, use 'consider adding another holding in order to create a better diversification for a steadier portfolio' "
         "instead of 'adding a small diversifier to raise effective N'.\n\n"
+
         "You will be provided with quantitative data (weights, performance figures) and a small set of news. "
         "Your goal is to synthesize these into a qualitative, strategic analysis that goes beyond simply stating the obvious.\n\n"
+
+        "**Before writing, perform these internal checks (do not output them):** "
+        "if both weight and recent_return are provided, compute a simple contribution proxy per holding = weight × recent_return; "
+        "use this to identify top drivers and to align recommendations with the stated risks. "
+        "Identify the single largest weight and note if it exceeds a soft threshold (e.g., 30–35%) to assess concentration risk. "
+        "Do not invent any numbers not supplied.\n\n"
 
         "**Output a JSON object with the following exact keys:**\n\n"
 
@@ -216,31 +224,33 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
 
         "2.  \"portfolioAllocation\": (Array of Objects) Detail each holding with a short summary:\n"
         "    -  HoldingName — **one or two sentences, data-rich.** Weave in the holding’s weight and recent performance; "
-        "       process the provided numbers and the specific driver(s) you see in the input data or news, and deliver anything interesting or important in an intriguing way. "
-        "       Avoid vague phrases like 'company-specific initiatives'. Keep it concise and concrete.\n\n"
+        "       use the provided numbers and the specific driver(s) from the input news. Avoid vague phrases like 'company-specific initiatives'. "
+        "       Do **not** claim numeric contributions to overall returns unless explicitly provided. Keep it concise and concrete.\n\n"
 
         "3.  \"News\": (Array of Strings) Up to **three** synthesized items on the most material news affecting the portfolio. "
-        "**Do not copy or lightly edit headlines.** Instead, produce impact-oriented analysis:\n"
-        "   - Use only the companies present in the portfolio.\n"
-        "   - Only rely on information provided in the prompt (e.g., the supplied news items or performance data). **No outside knowledge.**\n"
-        "   - If a provided news item is not financially material or cannot be tied to a clear mechanism, omit it; fewer than three items is acceptable.\n"
-        "   - **Anti-headline rule:** Do not reuse title-case phrasing or quote headlines; ensure your bullet shares **<40% word overlap** with any supplied title. "
-        "     Avoid question-style constructions ('Why is…'). Write in sentence case, 22–40 words.\n"
-        "   - Prefer strong verbs (\"expands\", \"secures\", \"pressures\", \"lifts\", \"compresses\") and name the lever (pricing, mix, subs, utilization, opex).\n\n"
+        "**Do not copy or lightly edit headlines.** Write **each item as a single, self-contained sentence (22–40 words) in sentence case** that: "
+        "names the holding, states what happened, ties it to a clear financial mechanism (e.g., revenue/pricing/ARPU/margins/backlog/capex/opex/FCF), "
+        "and states the directional impact. **End the sentence with ' (+)' for positive or ' (-)' for negative.** "
+        "Do not use arrows (→) or telegraphic fragments.\n"
+        "   - Use only companies present in the portfolio.\n"
+        "   - Rely only on information provided in the prompt (news items, performance). **No outside knowledge.**\n"
+        "   - Omit any item that cannot be tied to a financial mechanism; fewer than three items is acceptable.\n"
+        "   - **Anti-headline rule:** Do not reuse title case or more than 40% of any supplied headline’s words; avoid question-style constructions.\n\n"
 
         "4.  \"strategicRecommendations\": (String) **Return a single, plain-English, 1–2 sentence conclusion** that includes: "
-        "(a) the single biggest portfolio risk, (b) one forward-looking opportunity, and (c) one specific step to improve resilience or quality "
+        "(a) the biggest portfolio risk, (b) one forward-looking opportunity, and (c) one specific step to improve resilience or quality "
         "(e.g., cap the largest position, add one more holding, set a simple rebalance rule). "
+        "When the identified risk is concentration, **prefer** to reference the specific oversized holding in the action (e.g., 'trim <HoldingName>'), "
+        "unless the provided data clearly suggests a different target; if you choose a different target, briefly state the reason in the same sentence. "
         "**Avoid quant jargon and metrics**—do not mention terms like 'effective N', 'tracking error', 'beta', 'Sharpe', or similar. "
-        "Prefer everyday wording such as 'better diversification', 'steadier portfolio', 'reduce concentration'. "
-        "If there is truly nothing non-obvious to add from the provided inputs, return an empty string.\n\n"
-
-        "5.  \"bottomLine\": (String) A concise, decisive summary of the portfolio’s quality and balance—one sentence.\n\n"
+        "**Banned phrasing:** never use 'effective N' or 'raise effective N' (in any casing). Use plain-English alternatives such as 'improve diversification', "
+        "'broaden breadth', or 'add one more holding'. Ensure the recommendation does not contradict the diagnosed risk.\n\n"
 
         "**General rules:**\n"
-        "- Use only information supplied in the prompt; do not invent facts, tickers, or counterparties not provided.\n"
+        "- Use only information supplied in the prompt; do not invent facts, tickers, counterparties, or numbers.\n"
         "- Keep writing tight and specific; avoid boilerplate, clichés, and passive voice.\n"
         "- All keys above are required; if a section has no qualifying content, return an empty array or empty string.\n"
+        "- Do **not** add extra keys. Specifically, do not include a \"bottomLine\" field.\n"
         "- Return **only** the final JSON object—no preamble, no code fences, no explanations."
     )
 
