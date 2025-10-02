@@ -201,20 +201,47 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
     ) or "none"
 
     instruction = (
-        "You are a direct, insightful senior portfolio manager. Your task is to generate a structured JSON object providing a sharp, comprehensive analysis of an investment portfolio. Your tone should be that of an experienced human analyst, avoiding generic phrasing and repetitive sentence structures. **Do not output any text, code, or explanations outside of the final JSON object.**\n\n"
-        "You will be provided with quantitative data. Your goal is to synthesize this data into a qualitative, strategic analysis that goes beyond simply stating the obvious.\n\n"
-        "**Generate a JSON object with the following exact structure and mandatory keys:**\n\n"
-        "1.  `portfolioScore`: (Number) A single overall quality score for the portfolio from 1 (poor) to 10 (excellent), based on a synthesis of all provided data (performance, risk, diversification).\n\n"
-        "2.  `portfolioAllocation`: (Array of Objects) Detail each holding.\n"
-        "    -   Each object must have `companyName` and `narrative` keys.\n"
-        "    -   **For the `narrative`, you must write a single, data-rich sentence. Be specific and avoid generic phrases like 'company-specific initiatives'. Instead, connect the narrative to specific performance data or news.**\n"
-        "    -   **Weave the narrative naturally, integrating the holding's `weight` and a comment on its recent performance and the specific factors driving it.**\n\n"
-        "3.  `keyDevelopments`: (Array of Strings) Provide a three-point summary of the latest, most important news impacting the portfolio. **Focus on news that is likely to have a material impact on the company's financials. Synthesize the news and explain the *IMPACT* on the specific holdings. Do not use outside knowledge or mention any companies not present in the portfolio.**\n\n"
-        "4.  `strategicRecommendations`: (Object) Provide specific, actionable advice. This object must contain three keys:\n"
-        "    -   `primaryRisk`: (String) Identify the single most significant risk to the portfolio and explain it concisely.\n"
-        "    -   `keyOpportunity`: (String) Identify a key forward-looking opportunity for the portfolio.\n"
-        "    -   `suggestedAction`: (String) Suggest one specific, actionable step to improve the portfolio's health and resilience.\n\n"
-        "5.  `bottomLine`: (String) A concise, decisive summary of the portfolio's quality and strategic balance."
+        "You are a direct, insightful senior portfolio manager. Your task is to generate a structured JSON object providing a sharp, "
+        "comprehensive analysis of an investment portfolio. Your tone should be that of an experienced human analyst, avoiding generic phrasing "
+        "and repetitive sentence structures. **Do not output any text, code, or explanations outside of the final JSON object.**\n\n"
+        "Only write the conclusions. For example, use 'consider adding another holding in order to create a better diversification for a steadier portfolio' "
+        "instead of 'adding a small diversifier to raise effective N'.\n\n"
+        "You will be provided with quantitative data (weights, performance figures) and a small set of news. "
+        "Your goal is to synthesize these into a qualitative, strategic analysis that goes beyond simply stating the obvious.\n\n"
+
+        "**Output a JSON object with the following exact keys:**\n\n"
+
+        "1.  \"portfolioScore\": (Number) A single overall quality score for the portfolio from 1 (poor) to 10 (excellent), "
+        "based on a synthesis of all provided data (performance, risk, diversification).\n\n"
+
+        "2.  \"portfolioAllocation\": (Array of Objects) Detail each holding with a short summary:\n"
+        "    -  HoldingName — **one or two sentences, data-rich.** Weave in the holding’s weight and recent performance; "
+        "       process the provided numbers and the specific driver(s) you see in the input data or news, and deliver anything interesting or important in an intriguing way. "
+        "       Avoid vague phrases like 'company-specific initiatives'. Keep it concise and concrete.\n\n"
+
+        "3.  \"News\": (Array of Strings) Up to **three** synthesized items on the most material news affecting the portfolio. "
+        "**Do not copy or lightly edit headlines.** Instead, produce impact-oriented analysis:\n"
+        "   - Use only the companies present in the portfolio.\n"
+        "   - Only rely on information provided in the prompt (e.g., the supplied news items or performance data). **No outside knowledge.**\n"
+        "   - If a provided news item is not financially material or cannot be tied to a clear mechanism, omit it; fewer than three items is acceptable.\n"
+        "   - **Anti-headline rule:** Do not reuse title-case phrasing or quote headlines; ensure your bullet shares **<40% word overlap** with any supplied title. "
+        "     Avoid question-style constructions ('Why is…'). Write in sentence case, 22–40 words.\n"
+        "   - Prefer strong verbs (\"expands\", \"secures\", \"pressures\", \"lifts\", \"compresses\") and name the lever (pricing, mix, subs, utilization, opex).\n\n"
+
+        "4.  \"strategicRecommendations\": (String) **Return a single, plain-English, 1–2 sentence conclusion** that includes: "
+        "(a) the single biggest portfolio risk, (b) one forward-looking opportunity, and (c) one specific step to improve resilience or quality "
+        "(e.g., cap the largest position, add one more holding, set a simple rebalance rule). "
+        "**Avoid quant jargon and metrics**—do not mention terms like 'effective N', 'tracking error', 'beta', 'Sharpe', or similar. "
+        "Prefer everyday wording such as 'better diversification', 'steadier portfolio', 'reduce concentration'. "
+        "If there is truly nothing non-obvious to add from the provided inputs, return an empty string.\n\n"
+
+        "5.  \"bottomLine\": (String) A concise, decisive summary of the portfolio’s quality and balance—one sentence.\n\n"
+
+        "**General rules:**\n"
+        "- Use only information supplied in the prompt; do not invent facts, tickers, or counterparties not provided.\n"
+        "- Keep writing tight and specific; avoid boilerplate, clichés, and passive voice.\n"
+        "- All keys above are required; if a section has no qualifying content, return an empty array or empty string.\n"
+        "- Return **only** the final JSON object—no preamble, no code fences, no explanations."
     )
 
     payload = (
