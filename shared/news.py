@@ -98,6 +98,7 @@ def fetch_news_api(symbols: list[str], limit: int = 10) -> list[dict]:
         pass
 
     # Sort by date and return the most recent articles, up to the limit.
+    out = [item for item in out if item.get("content", "").strip()]
     out.sort(key=lambda x: x.get("publishedAt", ""), reverse=True)
     return out[: max(0, limit * len(syms)) or limit]
 

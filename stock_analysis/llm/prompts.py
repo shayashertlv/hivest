@@ -56,36 +56,55 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
         social_sentiment_score = f"{metrics.social_sentiment.get('sentimentScore'):.2f}"
 
     # --- The New JSON Schema with Interpretive Instructions ---
-    schema = (
-        '{\n'
-        '  "introduction": "string (A 2-3 sentence intro. Start with what the company is, then its performance over the last year, and finally a note on its latest business focus. **Avoid technical jargon like \'beta\'.**)",\n'
-        '  "analystRating": {\n'
-        '    "rating": "string (e.g., \'Buy\', \'Hold\')",\n'
-        '    "rationale": "string (Explain the rating. Reference a specific piece of news and explain WHY it supports the long-term potential.)"\n'
-        '  },\n'
-        '  "keyDrivers": {\n'
-        '    "strength": "string (**Interpret the fundamental data.** Example: \'The company shows strong profitability with an impressive 25% growth in earnings, indicating high demand.\' Do NOT just state the raw number.)",\n'
-        '    "concern": "string (Describe the main risk or concern.)",\n'
-        '    "opportunity": "string (Describe the biggest growth opportunity.)"\n'
-        '  },\n'
-        '  "financialsAndTechnicals": "string (A 2-sentence summary. First, summarize the most important fundamental facts. Second, **provide conclusions from the technicals.** Example: \'Technicals suggest the stock has strong upward momentum but may be approaching overbought territory.\' Do NOT state the raw RSI or price levels.)",\n'
-        '  "sentiment": {\n'
-        '    "news": "string (Summarize the news sentiment. **Provide nuance.** Example: \'News sentiment is cautiously optimistic, focusing on long-term potential while noting short-term risks.\')",\n'
-        '    "social": "string (Summarize the public\'s sentiment from social media. **Provide nuance.** Example: \'Social media sentiment is largely positive, with retail investors expressing excitement about the upcoming product launch.\')"\n'
-        '  },\n'
-        '  "projections": {\n'
-        '    "nextWeek": "string (A qualitative forecast for the next week, **basing the reasoning on both the company-specific news and the broader market news provided.**)",\n'
-        '    "sixMonths": "string (A price target or range based on analyst estimates.)",\n'
-        '    "oneYear": "string (A price target or range based on analyst estimates.)"\n'
-        '  }\n'
-        '}'
-    )
+    schema = """{
+      "introduction": "string (A 2-3 sentence intro. Start with what the company is, then its performance over the last year, and finally a note on its latest business focus. **Avoid technical jargon like 'beta'.**)",
+      "analystRating": {
+        "rating": "string (e.g., 'Buy', 'Hold')",
+        "rationale": "string (Explain the rating. Reference a specific piece of news and explain WHY it supports the long-term potential.)"
+      },
+      "keyDrivers": {
+        "strength": "string (**Interpret the fundamental data.** Example: 'The company shows strong profitability with an impressive earnings trajectory, indicating high demand.' Do NOT just state raw numbers.)",
+        "concern": "string (Describe the main risk or concern.)",
+        "opportunity": "string (Describe the biggest growth opportunity.)"
+      },
+      "financialsAndTechnicals": "string (A 2-sentence summary. First, summarize the most important fundamental facts. Second, **provide conclusions from the technicals.** Example: 'Technicals suggest the stock has strong upward momentum but may be approaching overbought territory.' Do NOT state the raw RSI or price levels.)",
+      "financialTrends": {
+        "servicesGrowth": "string (Interpret the Services growth trend and why it matters for margins, stability, or valuation.)",
+        "buybacks": "string (Summarize capital returns via buybacks and their impact on EPS durability or downside support—interpretive, not numeric.)",
+        "revenueMix": "string (Describe notable shifts in mix—e.g., iPhone vs. Services/Wearables—and what those shifts imply for growth and resilience.)"
+      },
+      "peerComparison": {
+        "peerSet": "string (Name the key peers used for comparison; e.g., 'MSFT, GOOGL, META'.)",
+        "relativeStrengths": "string (Where the company is stronger than peers—ecosystem lock-in, margins, platform advantages—interpretive only.)",
+        "relativeWeaknesses": "string (Where it lags peers—valuation premium, slower segment growth, dependency risks—interpretive only.)"
+      },
+      "riskSurface": {
+        "competition": "string (Competitive threats and pricing pressure from direct and adjacent players.)",
+        "execution": "string (Execution risks like product timing, adoption curves, integration, or channel.)",
+        "macroAndRegulatory": "string (Macro, FX, supply-chain, and regulatory/antitrust exposure with brief implications.)",
+        "mitigants": "string (Key factors that could offset these risks—balance sheet strength, loyal user base, ecosystem, or diversification.)"
+      },
+      "sentiment": {
+        "news": "string (Summarize the news sentiment. **Provide nuance.** Example: 'News sentiment is cautiously optimistic, focusing on long-term potential while noting short-term risks.')",
+        "social": "string (Summarize the public's sentiment from social media. **Provide nuance.** Example: 'Social media sentiment is largely positive, with retail investors expressing excitement about the upcoming product launch.')"
+      },
+      "projections": {
+        "nextWeek": "string (A qualitative forecast for the next week, **basing the reasoning on both the company-specific news and the broader market news provided.**)",
+        "sixMonths": "string (A price target or range based on analyst estimates.)",
+        "oneYear": "string (A price target or range based on analyst estimates.)"
+      }
+    }"""
 
     # --- The New Instructions for the LLM ---
     instruction = (
         "You are a financial analyst writing a report for a retail investor. Your tone is professional and easy to understand. "
-        "Your task is to generate a single, clean JSON object with no extra text or markdown.\n"
-        "Follow the provided schema exactly. **Your primary goal is to interpret the data and provide conclusions, not to repeat the raw numbers.**"
+        "Your task is to generate a single, clean JSON object with no extra text or markdown. "
+        "Follow the provided schema exactly. **Your primary goal is to interpret the data and provide conclusions, not to repeat raw numbers.** "
+        "For technicals, do not state specific indicators or price levels—only conclusions. "
+        "For peerComparison, discuss relative positioning versus named peers without quoting raw multiples—focus on why the company is stronger or weaker. "
+        "For financialTrends, interpret Services growth, buybacks, and revenue mix shifts (e.g., iPhone vs. Services/Wearables) and explain why they matter. "
+        "For riskSurface, cover competition, execution, macro/regulatory, and note any mitigants. "
+        "Be concise, concrete, and avoid jargon where possible."
     )
 
     context = (

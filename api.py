@@ -100,12 +100,17 @@ def analyze():
         return jsonify({"error": "An internal server error occurred during analysis."}), 500
 
 
-@app.route('/stock-analysis', methods=['GET'])
+@app.route('/stock-analysis', methods=['POST', 'OPTIONS'])
 def stock_analysis():
     """Return AI JSON analysis for a single stock symbol via Ollama."""
-    symbol = request.args.get('symbol', type=str)
+    # Handle CORS preflight requests
+    if request.method == 'OPTIONS':
+        return jsonify(success=True), 200
+
+    data = request.get_json(silent=True) or {}
+    symbol = data.get('symbol') if isinstance(data, dict) else None
     if not symbol or not isinstance(symbol, str) or not symbol.strip():
-        return jsonify({"error": "Missing required 'symbol' query parameter."}), 400
+        return jsonify({"error": "Missing required 'symbol' in JSON body."}), 400
 
     try:
         si = StockInput(symbol=symbol.strip().upper())
