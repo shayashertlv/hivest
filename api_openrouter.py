@@ -197,7 +197,7 @@ def analyze():
         )
 
         # Use OpenRouter LLM instead of Ollama
-        llm = make_llm_openrouter("llama3:8b")
+        llm = make_llm_openrouter("openai/gpt-oss-120b")
         analysis_result = llm(prompt)
 
         return jsonify({"analysis": analysis_result})
