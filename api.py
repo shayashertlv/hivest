@@ -103,17 +103,16 @@ def analyze():
 @app.route('/stock-analysis', methods=['POST', 'OPTIONS'])
 def stock_analysis():
     """Return AI JSON analysis for a single stock symbol via Ollama."""
-    # Handle CORS preflight requests
     if request.method == 'OPTIONS':
         return jsonify(success=True), 200
 
     data = request.get_json(silent=True) or {}
     symbol = data.get('symbol') if isinstance(data, dict) else None
-    if not symbol or not isinstance(symbol, str) or not symbol.strip():
+    if not symbol or not isinstance(symbol, str) or not (symbol := symbol.strip()):
         return jsonify({"error": "Missing required 'symbol' in JSON body."}), 400
 
     try:
-        si = StockInput(symbol=symbol.strip().upper())
+        si = StockInput(symbol=symbol.upper())
         report = analyze_stock(si)
         metrics = report.metrics
 
@@ -121,11 +120,21 @@ def stock_analysis():
         llm = make_llm("llama3:8b")
         raw = llm(prompt)
 
+        # --- REVISED JSON PARSING LOGIC ---
         try:
-            fixed_raw = re.sub(r'(?<="|})\s*\n\s*(?=")', ',\n', raw)
-            data = json.loads(fixed_raw)
+            # +++ More robustly find and extract the JSON object from the raw string +++
+            start_index = raw.find('{')
+            end_index = raw.rfind('}')
+            if start_index != -1 and end_index != -1 and end_index > start_index:
+                json_str = raw[start_index : end_index + 1]
+                data = json.loads(json_str)
+            else:
+                # Fallback if no JSON object is found
+                raise json.JSONDecodeError("Could not find a valid JSON object in the LLM response.", raw, 0)
 
-        except Exception as ex:
+        # +++ More specific exception handling +++
+        except json.JSONDecodeError as ex:
+            current_app.logger.error(f"LLM returned invalid JSON for {symbol}: {ex}")
             return jsonify({
                 "error": "LLM returned invalid JSON.",
                 "details": str(ex),
@@ -135,18 +144,15 @@ def stock_analysis():
         return jsonify(data)
 
     except (requests.exceptions.RequestException, RuntimeError) as e:
-        # This will catch connection errors from the LLM client
-        # and the RuntimeError it raises after retries fail.
-        print(f"[stock-analysis] LLM connection error: {e}")
+        current_app.logger.error(f"[stock-analysis] LLM connection error for {symbol}: {e}")
         return jsonify({
             "error": "Could not connect to the LLM service.",
             "details": "Please ensure the Ollama server is running and accessible."
-        }), 502
+        }), 503 # 503 Service Unavailable is more appropriate here
 
     except Exception as e:
-        print(f"[stock-analysis] Unexpected error: {e}")
+        current_app.logger.error(f"[stock-analysis] Unexpected error for {symbol}: {e}")
         traceback.print_exc()
         return jsonify({"error": "An internal server error occurred during stock analysis."}), 500
-
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
