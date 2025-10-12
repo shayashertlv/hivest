@@ -1,10 +1,36 @@
 import os
+import sys
 import time
 import random
 import traceback
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from dotenv import load_dotenv, find_dotenv
+
+# Resolve project root relative to this file
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+
+# Find the nearest `.env` walking up from this file; fall back to project root
+dotenv_path = find_dotenv(usecwd=False)
+if not dotenv_path:
+    dotenv_path = os.path.join(PROJECT_ROOT, ".env")
+
+# Load it (override ensures PyCharm’s run config doesn't mask changes)
+load_dotenv(dotenv_path=dotenv_path, override=True)
+
+# --- Optional debug (remove after it works) ---
+print("Using .env:", dotenv_path)
+print("OPENROUTER_API_KEY present:", bool(os.getenv("OPENROUTER_API_KEY")))
+app = Flask(__name__)
+
+# Ensure package imports work when running this file directly: `python hivest\\api_openrouter_testing.py`
+if __package__ is None or __package__ == "":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_dir)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
 
 from hivest.portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
 from hivest.portfolio_analysis.processing.models import PortfolioInput, AnalysisOptions
@@ -14,7 +40,7 @@ from hivest.portfolio_analysis.llm.prompts import build_portfolio_prompt
 # --- OpenRouter LLM helper (replicates llm_client.make_llm flow, but for OpenRouter) ---
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-
+OPENROUTER_MODEL="openai/gpt-oss-120b"
 
 def _get_openrouter_model(passed: str | None = None) -> str:
     # Priority: explicit param -> env -> default mapping similar to llama3:8b
@@ -105,11 +131,15 @@ def make_llm_openrouter(model_name: str | None = None):
                 {"role": "user", "content": prompt},
             ],
             "temperature": temperature,
-            "max_tokens": 1024,
+            "max_tokens": 5000,
             "stream": False,
         }
 
         data = _post_openrouter_chat(payload, timeout, retries=2, backoff=1.0)
+        import json  # Add this line
+        print(json.dumps(data, indent=2))  # Add this line to pretty-print the JSON
+        print("-----------------------------")
+
         # Standard OpenRouter response shape
         try:
             choices = data.get("choices", [])
