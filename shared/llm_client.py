@@ -144,7 +144,7 @@ def make_llm(model_name: str | None = None, host: str | None = None):
             ],
             "options": {
                 "temperature": temperature,
-                "num_predict": 1024,
+                "num_predict": 5000,
             }
         }
         # Hide DeepSeek-R1 thinking if used
