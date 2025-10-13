@@ -91,8 +91,10 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
     # +++ Added context tags to fundamentals for better model interpretation +++
     fund_items = metrics.fundamentals or {}
     fund_map = {
-        "peRatio": "Valuation", "roe": "Quality", "debtToEquity": "Balance Sheet",
-        "cr": "Liquidity", "payoutRatio": "Shareholder Return"
+        "peRatio": "Valuation (TTM)", "roe": "Quality", "debtToEquity": "Balance Sheet",
+        "cr": "Liquidity", "payoutRatio": "Shareholder Return",
+        # Add the target price here
+        "analyst_target_price": "Analyst Avg Target Price"
     }
     fund_line = ", ".join(f"{k} ({fund_map.get(k, 'Metric')})={v:.3g}" for k, v in fund_items.items() if v is not None) if fund_items else "none"
 
@@ -126,11 +128,11 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
 
     # +++ Sharpened instructions with core principles +++
     instruction = (
-        "You are a concise financial analyst for a retail audience. Generate a single, valid JSON object based on the schema and data. Follow these principles:\n"
-        "1. BE AN INSIGHTFUL ANALYST, NOT A DATA REPORTER: Interpret the data, don't just repeat it. Connect the dots between fundamentals, news, and the stock's story.\n"
-        "2. SYNTHESIZE, DON'T REPEAT: Each field must offer a unique insight. Do not state the same core idea (e.g., 'strong brand') in multiple sections.\n"
-        "3. QUANTIFY TO JUSTIFY: Back up a claim with a key piece of data, but don't just list numbers. Example: 'Valuation appears stretched, trading at a premium to its historical average.'\n"
-        "4. BE CLEAR AND CONCISE: Use plain English. No jargon. No filler."
+        "You are a concise financial analyst for a retail audience. Generate a single, valid JSON object based on the schema and data. Follow these non-negotiable principles:\n"
+        "1. RELY EXCLUSIVELY ON PROVIDED DATA: Your entire output must be derived SOLELY from the data in the '--- DATA FOR...' block. Do not use outside knowledge or make calculations.\n"
+        "2. DO NOT INVENT FACTS: If the data for a required field (like 'priceTarget12M' or 'rating') is not present in the fundamentals, you MUST output 'N/A' for that field.\n"
+        "3. SYNTHESIZE, DON'T REPEAT: Each field must offer a unique insight. Do not state the same core idea (e.g., 'strong brand') in multiple sections.\n"
+        "4. CITE YOUR SOURCES: When discussing catalysts, directly reference the 'NextEarnings' date provided. When discussing valuation, reference the fundamental metrics provided."
     )
 
     context = (
@@ -138,6 +140,7 @@ def build_stock_json_prompt(symbol: str, metrics: StockMetrics) -> str:
         f"Date: {dt_now}\n"
         f"Performance: {perf}\n"
         f"Technicals: {tech}\n"
+        # The revised fund_line will now be used here, including the price target if available
         f"Fundamentals: {fund_line}\n"
         f"NextEarnings: {metrics.next_earnings or 'none'}\n"
         f"Recent News for {symbol.upper()}:\n{news_block}\n"

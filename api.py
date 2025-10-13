@@ -4,7 +4,7 @@ import os
 import re
 import sys
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, current_app
 from flask_cors import CORS
 
 # Ensure package imports work when running this file directly (python hivest\api.py)
@@ -115,6 +115,10 @@ def stock_analysis():
         si = StockInput(symbol=symbol.upper())
         report = analyze_stock(si)
         metrics = report.metrics
+
+        current_app.logger.info(f"Metrics for {symbol}: PE={metrics.fundamentals.get('peRatio')}, "
+                                f"Target={metrics.fundamentals.get('analyst_target_price')}, "
+                                f"NextEarnings='{metrics.next_earnings}'")
 
         prompt = build_stock_json_prompt(si.symbol, metrics)
         llm = make_llm("llama3:8b")
