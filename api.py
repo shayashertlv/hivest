@@ -17,7 +17,7 @@ from hivest.portfolio_analysis.processing.models import PortfolioInput, Analysis
 from hivest.portfolio_analysis.llm.prompts import build_portfolio_prompt
 from hivest.stock_analysis.processing.models import StockInput
 from hivest.stock_analysis.processing.engine import analyze_stock
-from hivest.stock_analysis.llm.prompts import build_stock_json_prompt
+from hivest.stock_analysis.llm.prompts import build_stock_prompt
 from hivest.shared.llm_client import make_llm
 
 app = Flask(__name__)
@@ -120,7 +120,7 @@ def stock_analysis():
                                 f"Target={metrics.fundamentals.get('analyst_target_price')}, "
                                 f"NextEarnings='{metrics.next_earnings}'")
 
-        prompt = build_stock_json_prompt(si.symbol, metrics)
+        prompt = build_stock_prompt(si.symbol, metrics)
         llm = make_llm("llama3:8b")
         raw = llm(prompt)
 

@@ -8,7 +8,7 @@ from ...shared.risk import compute_beta, compute_volatility, compute_drawdown_st
 from ...shared.fundamentals import get_fundamentals
 from ...shared.news import fetch_news_api
 from ...shared.events import next_earnings_date
-from ..llm.prompts import build_stock_json_prompt
+from ..llm.prompts import build_stock_prompt
 from ...shared.llm_client import make_llm
 import json
 
@@ -71,7 +71,7 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
     )
     # --- End of Corrected Section ---
 
-    prompt = build_stock_json_prompt(si.symbol, metrics)
+    prompt = build_stock_prompt(si.symbol, metrics)
     llm = make_llm(opt.llm_model, opt.llm_host)
 
     # This line was also referencing an old function, correcting it.
