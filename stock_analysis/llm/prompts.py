@@ -35,7 +35,7 @@ def _fmt_news(items: List[Dict[str, Any]] | None, limit: int = 3) -> str:
 
 # -------- 1) short natural-language paragraph (Minor Polish) --------
 def build_stock_prompt(symbol: str, tf_label: str, m: StockMetrics) -> str:
-    dt_now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    dt_now = datetime.now().strftime("%Y-%-d %H:%M")
 
     perf = (
         f"{tf_label}: cum={m.cum_return * 100:.2f}%, vol={m.volatility * 100:.2f}%, "
@@ -50,8 +50,10 @@ def build_stock_prompt(symbol: str, tf_label: str, m: StockMetrics) -> str:
         "peRatio": "Valuation", "roe": "Quality", "debtToEquity": "Balance Sheet",
         "cr": "Liquidity", "payoutRatio": "Shareholder Return"
     }
+    # FIX: Added 'if v is not None' to prevent formatting errors
     fund = ", ".join(
-        f"{k} ({fund_map.get(k, 'Metric')})={v:.2f}" for k, v in fund_items.items()) if fund_items else "none"
+        f"{k} ({fund_map.get(k, 'Metric')})={v:.2f}" for k, v in fund_items.items() if v is not None
+    ) if fund_items else "none"
     nxt = m.next_earnings or "none"
     news = _fmt_news(m.news_items, limit=3)
 
@@ -86,30 +88,58 @@ def build_pre_analysis_prompt(symbol: str, metrics: StockMetrics) -> str:
     This is the first step in the new two-step JSON generation process.
     """
     inst = (metrics.instrument_type or "stock").lower().strip()
-    perf = f"cum_return_1y={metrics.cum_return * 100:.2f}%; beta={metrics.beta_vs_spy:.2f}"
+
+    # Add qualitative context to beta
+    beta_val = metrics.beta_vs_spy
+    beta_text = f"beta={beta_val:.2f}"
+    if beta_val > 1.5:
+        beta_text += " (significantly more volatile than the market)"
+    elif beta_val > 1.1:
+        beta_text += " (more volatile than the market)"
+    elif beta_val < 0.9:
+        beta_text += " (less volatile than the market)"
+    else:
+        beta_text += " (average market volatility)"
+
+    perf = f"cum_return_1y={metrics.cum_return * 100:.2f}%; {beta_text}"
     tech = f"last_close={metrics.last_close:.2f}; rsi14={metrics.rsi14:.1f}; trend_50d_vs_200d={'Uptrend' if metrics.sma50 > metrics.sma200 else 'Downtrend'}"
 
     fund_items = metrics.fundamentals or {}
-    fund_map = {
-        "peRatio": "Valuation (TTM)", "roe": "Quality", "debtToEquity": "Balance Sheet",
-        "cr": "Liquidity", "payoutRatio": "Shareholder Return",
-        "analyst_target_price": "Analyst Avg Target Price"
-    }
-    fund_line = ", ".join(f"{k} ({fund_map.get(k, 'Metric')})={v:.3g}" for k, v in fund_items.items() if
-                          v is not None) if fund_items else "none"
+
+    # Add qualitative context to P/E Ratio
+    pe_ratio = fund_items.get("peRatio")
+    pe_text = ""
+    if pe_ratio is not None:
+        if pe_ratio > 50:
+            pe_text = f"P/E Ratio={pe_ratio:.2f} (suggests high growth expectations or potential overvaluation)"
+        elif pe_ratio > 25:
+            pe_text = f"P/E Ratio={pe_ratio:.2f} (suggests a growth stock valuation)"
+        else:
+            pe_text = f"P/E Ratio={pe_ratio:.2f} (suggests a value stock valuation)"
+
+    # Build a more descriptive fundamentals line
+    fund_parts = [pe_text] if pe_text else []
+    for k, v in fund_items.items():
+        if k != "peRatio" and v is not None:
+            fund_parts.append(f"{k}={v:.3g}")
+
+    fund_line = ", ".join(fund_parts) if fund_parts else "none"
 
     news_block = _fmt_news(metrics.news_items, limit=3)
     market_news_block = _fmt_news(metrics.market_news_items, limit=3)
 
     instruction = (
-        "You are a junior financial analyst. Your task is to analyze the raw data provided for the stock and extract key interpretive insights. Do NOT write a final report or JSON. "
-        "Instead, create a concise, bulleted list under the following specific headings. Each bullet must be a distinct idea derived directly from the data.\n\n"
-        "Headings to use:\n"
-        "- [Strengths & Opportunities]\n"
-        "- [Weaknesses & Risks]\n"
+        "You are a junior financial analyst. Your task is to analyze the raw data and extract key insights for a senior analyst. "
+        "Focus on **interpreting** the numbers. Do NOT just repeat the data. "
+        "Create a concise, bulleted list under the most relevant headings. Only create headings for which you have a meaningful insight.\n\n"
+        "Possible Headings:\n"
+        "- [Overall Performance]\n"
+        "- [Key Strengths]\n"
+        "- [Potential Risks]\n"
         "- [Valuation Insights]\n"
-        "- [Technical Insights]\n"
-        "- [Catalysts & Market Context]\n"
+        "- [Technical Picture]\n"
+        "- [Recent News & Catalysts]\n"
+        "- [Market Outlook]"
     )
 
     context = (
@@ -122,7 +152,7 @@ def build_pre_analysis_prompt(symbol: str, metrics: StockMetrics) -> str:
         f"Recent Market News:\n{market_news_block}\n"
     )
 
-    return f"{instruction}\n{context}\n--- OUTPUT (Bulleted list only) ---"
+    return f"{instruction}\n{context}\n--- OUTPUT (Bulleted list of insights only) ---"
 
 
 # +++ REFACTOR STEP 2: Use the pre-analyzed insights to synthesize the final JSON +++
@@ -131,37 +161,23 @@ def build_json_synthesis_prompt(pre_analysis_output: str) -> str:
     Builds the final prompt that takes pre-analyzed text and synthesizes it into a non-repetitive JSON.
     This is the second step in the new two-step process.
     """
-    schema = """{
-      "executiveSummary": {
-        "rating": "string ('Buy'/'Hold'/'Sell' or 'N/A')",
-        "priceTarget12M": "string (e.g., '$290' or 'N/A')",
-        "summary": "string (2-3 sentences. The 'bottom line up front'. What is the core thesis for the rating?)"
-      },
-      "investmentThesis": ["string (A bullet point explaining a core strength or opportunity.)", "string (A second, distinct bullet point.)"],
-      "keyRisks": ["string (A bullet point explaining a core weakness or threat.)", "string (A second, distinct bullet point.)"],
-      "valuationAndTechnicals": {
-        "valuation": "string (1-2 sentences interpreting the valuation insights.)",
-        "technicals": "string (1 sentence interpreting the technical insights.)"
-      },
-      "outlookAndSentiment": {
-        "catalysts": "string (1 sentence on near-term catalysts.)",
-        "marketContext": "string (1 sentence on the market context.)"
-      }
-    }"""
-
     instruction = (
-        "You are a senior financial analyst. You have been given a set of pre-analyzed points from your junior analyst. Your job is to synthesize these points into a polished, final JSON report according to the provided schema.\n\n"
+        "You are a senior financial analyst. You have been given a set of pre-analyzed points from your junior analyst. "
+        "Your job is to synthesize these points into a clear, insightful, and **jargon-free** JSON report for a retail investor.\n\n"
         "**CRITICAL RULES:**\n"
-        "1. USE ONLY THE PRE-ANALYZED POINTS: Your entire JSON output must be based exclusively on the text in the '--- PRE-ANALYZED POINTS ---' block.\n"
-        "2. NO REPETITION: Each core idea from the points must be mentioned ONLY ONCE in the entire JSON. Assign each point to its single most appropriate field.\n"
-        "3. FILL THE SCHEMA: Populate all fields in the schema. If a point is not available for a field (e.g., no target price was analyzed), use 'N/A'."
+        "1.  **NO FINANCIAL JARGON**: Do NOT use terms like 'beta', 'P/E ratio', 'RSI', 'SMA', or other technical indicators. Instead, **explain the conclusion** from those numbers in plain English. For example, instead of 'Beta is 1.8', say 'The stock is highly sensitive to market swings.'\n"
+        "2.  **DYNAMIC STRUCTURE**: Do NOT use a fixed template. Build a JSON object where the keys are descriptive titles for the insights you provide. Only include a key if you have a meaningful, non-generic insight for it.\n"
+        "3.  **SINGLE STRING VALUES**: The value for each key in the JSON object must be a **single string**. Combine all related points into one coherent paragraph. **Do not use lists or arrays of strings.**\n"
+        "4.  **BE SPECIFIC AND CONCISE**: Base your entire output **exclusively** on the provided points. If the points mention a partnership with a specific company, name that company. If they don't, do not mention partnerships at all.\n"
+        "5.  **SYNTHESIZE, DON'T REPEAT**: Combine related points into a coherent narrative under a single key. Each core idea should appear only once.\n"
+        "6.  **EXAMPLE KEYS**: You might use keys like `summary`, `positiveOutlook`, `potentialRisks`, `valuationCommentary`, `recentDevelopments`, or `stockPerformance`, but you should choose the most appropriate keys based on the provided text.\n\n"
+        "Your final output must be **only the JSON object** and nothing else."
     )
 
-    context = f"--- PRE-ANALYZED POINTS ---\n{pre_analysis_output}"
+    context = f"--- PRE-ANALYZED POINTS FROM JUNIOR ANALYST ---\n{pre_analysis_output}"
 
     return (
         f"{instruction}\n\n"
-        f"--- REQUIRED JSON SCHEMA ---\n{schema}\n\n"
         f"{context}\n\n"
-        f"--- OUTPUT (Valid JSON only) ---"
+        f"--- OUTPUT (Valid, jargon-free JSON with single string values only) ---"
     )

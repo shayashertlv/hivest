@@ -8,7 +8,8 @@ from ...shared.risk import compute_beta, compute_volatility, compute_drawdown_st
 from ...shared.fundamentals import get_fundamentals
 from ...shared.news import fetch_news_api
 from ...shared.events import next_earnings_date
-from ..llm.prompts import build_stock_prompt
+# Import the correct prompt builders for JSON generation
+from ..llm.prompts import build_pre_analysis_prompt, build_json_synthesis_prompt
 from ...shared.llm_client import make_llm
 import json
 
@@ -28,7 +29,9 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
     spy_dates, spy_closes = fetch_yahoo_chart("SPY", yf_range=infer_yahoo_range(si.timeframe_label), interval="1d")
     aligned = align_by_dates({"SPY": (spy_dates, spy_closes), si.symbol.upper(): (dates, closes)})
     srets = aligned.get(si.symbol.upper(), rets)
-    spyrets = compute_simple_returns(spy_closes)
+    # Corrected: Use aligned SPY returns for beta calculation
+    spyrets = aligned.get("SPY", compute_simple_returns(spy_closes))
+
 
     cum_ret = cumulative_return(srets)
     vol = compute_volatility(srets)
@@ -42,8 +45,6 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
     high_52w = max(window_52w) if window_52w else (closes[-1] if closes else 0.0)
     low_52w = min(window_52w) if window_52w else (closes[-1] if closes else 0.0)
 
-    # --- Start of Corrected Section ---
-    # Fetch all data first
     inst_type, fundamentals, etf_profile_data = get_fundamentals(si.symbol)
     social_sentiment_data = fundamentals.pop("social_sentiment", None)
 
@@ -53,7 +54,6 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
 
     etf_profile = EtfProfile(**etf_profile_data) if inst_type == "etf" and isinstance(etf_profile_data, dict) else None
 
-    # Now, create the metrics object with all the defined variables
     metrics = StockMetrics(
         dates=dates, closes=closes, returns=srets, cum_return=cum_ret, volatility=vol,
         beta_vs_spy=beta, max_drawdown=dd, rsi14=rsi14, sma20=s20, sma50=s50, sma200=s200,
@@ -69,19 +69,33 @@ def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockRe
         instrument_type=inst_type,
         etf_profile=etf_profile
     )
-    # --- End of Corrected Section ---
 
-    prompt = build_stock_prompt(si.symbol, metrics)
+    # --- START OF CORRECTED LLM SECTION ---
+    # Use the proper two-step JSON generation process
     llm = make_llm(opt.llm_model, opt.llm_host)
 
-    # This line was also referencing an old function, correcting it.
-    raw_json = (llm(prompt) or "").strip()
+    # Step 1: Generate the pre-analysis text
+    pre_analysis_prompt = build_pre_analysis_prompt(si.symbol, metrics)
+    pre_analysis_output = (llm(pre_analysis_prompt) or "").strip()
 
-    # A simple fallback for the narrative part
+    # Step 2: Use the pre-analysis to synthesize the final JSON
+    json_synthesis_prompt = build_json_synthesis_prompt(pre_analysis_output)
+    raw_json = (llm(json_synthesis_prompt) or "").strip()
+    # --- END OF CORRECTED LLM SECTION ---
+
     try:
-        narrative = json.loads(raw_json)
+        # More robustly find and extract the JSON object
+        start_index = raw_json.find('{')
+        end_index = raw_json.rfind('}')
+        if start_index != -1 and end_index != -1 and end_index > start_index:
+            json_str = raw_json[start_index : end_index + 1]
+            narrative = json.loads(json_str)
+        else:
+            raise json.JSONDecodeError("Could not find a valid JSON object in the LLM response.", raw_json, 0)
     except json.JSONDecodeError:
-        narrative = {"error": "Failed to generate valid analysis."}
+        LOG(f"Failed to decode LLM response for {si.symbol}: {raw_json}")
+        narrative = {"error": "Failed to generate valid analysis.", "raw_response": raw_json}
+
 
     return StockReport(metrics=metrics, narrative=narrative)
 

@@ -24,6 +24,7 @@ app = Flask(__name__)
 # Enable CORS for all routes
 CORS(app)
 
+
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 def analyze():
     """
@@ -114,49 +115,57 @@ def stock_analysis():
     try:
         si = StockInput(symbol=symbol.upper())
         report = analyze_stock(si)
-        metrics = report.metrics
 
-        current_app.logger.info(f"Metrics for {symbol}: PE={metrics.fundamentals.get('peRatio')}, "
-                                f"Target={metrics.fundamentals.get('analyst_target_price')}, "
-                                f"NextEarnings='{metrics.next_earnings}'")
-
-        prompt = build_stock_prompt(si.symbol, metrics)
-        llm = make_llm("llama3:8b")
-        raw = llm(prompt)
+        # The 'report' object already contains the JSON narrative from the LLM.
+        # No need to call the LLM again.
 
         # --- REVISED JSON PARSING LOGIC ---
-        try:
-            # +++ More robustly find and extract the JSON object from the raw string +++
-            start_index = raw.find('{')
-            end_index = raw.rfind('}')
-            if start_index != -1 and end_index != -1 and end_index > start_index:
-                json_str = raw[start_index : end_index + 1]
-                data = json.loads(json_str)
-            else:
-                # Fallback if no JSON object is found
-                raise json.JSONDecodeError("Could not find a valid JSON object in the LLM response.", raw, 0)
+        # The narrative from the report is already a dictionary,
+        # but if it failed, it might be a string. We handle both.
+        narrative = report.narrative
 
-        # +++ More specific exception handling +++
-        except json.JSONDecodeError as ex:
-            current_app.logger.error(f"LLM returned invalid JSON for {symbol}: {ex}")
-            return jsonify({
-                "error": "LLM returned invalid JSON.",
-                "details": str(ex),
-                "raw": raw
-            }), 502
+        if isinstance(narrative, dict):
+            # If it's already a dict, just return it
+            return jsonify(narrative)
+        elif isinstance(narrative, str):
+            # If it's a string, try to parse it
+            try:
+                # +++ More robustly find and extract the JSON object from the raw string +++
+                start_index = narrative.find('{')
+                end_index = narrative.rfind('}')
+                if start_index != -1 and end_index != -1 and end_index > start_index:
+                    json_str = narrative[start_index: end_index + 1]
+                    data = json.loads(json_str)
+                    return jsonify(data)
+                else:
+                    # Fallback if no JSON object is found
+                    raise json.JSONDecodeError("Could not find a valid JSON object in the LLM response.", narrative, 0)
 
-        return jsonify(data)
+            # +++ More specific exception handling +++
+            except json.JSONDecodeError as ex:
+                current_app.logger.error(f"LLM returned invalid JSON for {symbol}: {ex}")
+                return jsonify({
+                    "error": "LLM returned invalid JSON.",
+                    "details": str(ex),
+                    "raw": narrative
+                }), 502
+        else:
+            # Handle cases where narrative is not a dict or string
+            return jsonify({"error": "Invalid narrative format received from analysis engine."}), 500
+
 
     except (requests.exceptions.RequestException, RuntimeError) as e:
         current_app.logger.error(f"[stock-analysis] LLM connection error for {symbol}: {e}")
         return jsonify({
             "error": "Could not connect to the LLM service.",
             "details": "Please ensure the Ollama server is running and accessible."
-        }), 503 # 503 Service Unavailable is more appropriate here
+        }), 503  # 503 Service Unavailable is more appropriate here
 
     except Exception as e:
         current_app.logger.error(f"[stock-analysis] Unexpected error for {symbol}: {e}")
         traceback.print_exc()
         return jsonify({"error": "An internal server error occurred during stock analysis."}), 500
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
