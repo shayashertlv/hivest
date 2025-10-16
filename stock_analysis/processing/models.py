@@ -1,58 +1,69 @@
+"""hivest/stock_analysis/processing/models.py"""
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 
-@dataclass
-class EtfProfile:
-    expense_ratio: Optional[float] = None
-    top_holdings: List[Dict[str, Any]] = field(default_factory=list)
-    # Add other relevant ETF fields here in the future
 
 @dataclass
 class StockInput:
+    """Single-instrument analysis input."""
     symbol: str
-    timeframe_label: str = "6m"
+    timeframe_label: str = "1y"   # e.g., "YTD", "6m", "1y"
     periods_per_year: float = 252.0
-    avg_buy_price: Optional[float] = None
-    bought_at: Optional[str] = None  # YYYY-MM-DD
 
-@dataclass
-class StockOptions:
-    include_news: bool = True
-    include_events: bool = True
-    news_limit: int = 8
-    verbose: bool = False
-    llm_model: Optional[str] = None
-    llm_host: Optional[str] = None
-    echo_tools: bool = True
-
-@dataclass
-class StockMetrics:
-    dates: List[str] = field(default_factory=list)
-    closes: List[float] = field(default_factory=list)
+    # Time series (same periodicity)
     returns: List[float] = field(default_factory=list)
-    cum_return: float = 0.0
-    volatility: float = 0.0
-    beta_vs_spy: float = 0.0
-    max_drawdown: float = 0.0
-    rsi14: float = 0.0
-    sma20: float = 0.0
-    sma50: float = 0.0
-    sma200: float = 0.0
-    pct_from_52w_high: float = 0.0
-    pct_from_52w_low: float = 0.0
-    # Added absolute levels and last close for use in prompts/analysis
-    high_52w: float = 0.0
-    low_52w: float = 0.0
-    last_close: float = 0.0
-    fundamentals: Dict[str, float] = field(default_factory=dict)
-    social_sentiment: Optional[Dict] = None
-    news_items: List[Dict] = field(default_factory=list)
-    market_news_items: List[Dict] = field(default_factory=list)
-    next_earnings: Optional[str] = None
-    instrument_type: str = "stock"
-    etf_profile: Optional[EtfProfile] = None
+    benchmark_returns: Dict[str, List[float]] = field(default_factory=dict)  # e.g., {"SPY": [...], "QQQ": [...]}
+    market_returns: Optional[List[float]] = None  # If None, will try SPY
+
+    # Risk
+    risk_free_rate: float = 0.0
+
+    # Context
+    upcoming_events: Optional[List[Dict[str, Any]]] = None
+
 
 @dataclass
-class StockReport:
-    metrics: StockMetrics
-    narrative: str
+class AnalysisOptions:
+    include_news: bool = True
+    news_limit: int = 6
+    include_events: bool = True
+    verbose: bool = False
+
+
+@dataclass
+class ComputedMetrics:
+    # Core perf
+    cum_return: Optional[float] = None
+    volatility: Optional[float] = None
+    beta: Optional[float] = None
+    sharpe: Optional[float] = None
+    sortino: Optional[float] = None
+    max_drawdown: Optional[float] = None
+
+    # Benchmarks
+    benchmarks: Dict[str, Dict[str, Optional[float]]] = field(default_factory=dict)
+
+    # Technicals (optional if data insufficient)
+    rsi: Optional[float] = None
+    sma20: Optional[float] = None
+    sma50: Optional[float] = None
+    sma200: Optional[float] = None
+    pct_from_52w_high: Optional[float] = None
+    pct_from_52w_low: Optional[float] = None
+
+    # Spot price for sanity checks (optional)
+    last_price: Optional[float] = None
+
+    # Fundamentals and instrument typing
+    instrument_type: str = "stock"  # "stock" | "etf" | "crypto" (best-effort)
+    fundamentals: Dict[str, Any] = field(default_factory=dict)
+    etf_profile: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class StockAnalysisContext:
+    stock_input: StockInput
+    computed_metrics: ComputedMetrics
+    news_items: List[Dict[str, Any]] = field(default_factory=list)
+    upcoming_events: List[Dict[str, Any]] = field(default_factory=list)

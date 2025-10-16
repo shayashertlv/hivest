@@ -222,10 +222,7 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
         "1.  \"portfolioScore\": (Number) A single overall quality score for the portfolio from 1 (poor) to 10 (excellent), "
         "based on a synthesis of all provided data (performance, risk, diversification).\n\n"
 
-        "2.  \"portfolioAllocation\": (Array of Objects) Detail each holding with an insightful summary:\n"
-        "    -  HoldingName — **Write two sentences that provide a sharp, data-rich narrative.** The first sentence must state the holding's weight and recent performance. The second sentence must connect that performance to a specific business driver, market trend, or a key insight from the provided news. **Go beyond the obvious and provide a 'so what' for the investor.**\n\n"
-
-        "3. \"News\": (Array of Strings) **Return between 2 and 4 of the most impactful news items** that a portfolio owner should see. Use your judgment: if the provided articles are not significant, you may return fewer than 2. "
+        "2. \"News\": (Array of Strings) **Return between 2 and 4 of the most impactful news items** that a portfolio owner should see. Use your judgment: if the provided articles are not significant, you may return fewer than 2. "
         "Each item MUST describe a specific event or action from the supplied news. "
         "Do not write generic commentary or predictions. "
         "Write each item as a single, self-contained sentence in sentence case that names the holding, states what happened, ties it to a clear financial mechanism (e.g., revenue/pricing/margins/opex/guidance), and states the directional impact. "
@@ -235,7 +232,7 @@ def build_portfolio_prompt(pi: PortfolioInput, cm: ComputedMetrics, news_items: 
         " - Omit any item that cannot be tied to a financial mechanism or lacks a concrete event.\n"
         " - If multiple items concern the same holding, include only the most material one.\n\n"
 
-        "4.  \"strategicRecommendations\": (String) **Return a single, plain-English, 1–2 sentence conclusion** that includes: "
+        "3.  \"strategicRecommendations\": (String) **Return a single, plain-English, 1–2 sentence conclusion** that includes: "
         "(a) the biggest portfolio risk, (b) one forward-looking opportunity, and (c) one specific step to improve resilience or quality. "
         "When the identified risk is concentration, **prefer** to reference the specific oversized holding in the action (e.g., 'trim <HoldingName>'). "
         "**Avoid quant jargon and metrics** and ensure the recommendation does not contradict the diagnosed risk.\n\n"

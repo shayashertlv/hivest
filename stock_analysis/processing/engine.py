@@ -1,114 +1,176 @@
+"""hivest/stock_analysis/processing/engine.py"""
 from __future__ import annotations
-from typing import Optional
-from .models import StockInput, StockOptions, StockMetrics, StockReport, EtfProfile
-from .indicators import compute_rsi, sma, pct_from_window_extrema
-from ...shared.market import fetch_yahoo_chart, compute_simple_returns, infer_yahoo_range, align_by_dates
+from typing import Dict, Any, List, Optional, Tuple
+
+from .models import StockInput, AnalysisOptions, ComputedMetrics, StockAnalysisContext
+from ...shared.market import build_per_symbol_returns, infer_yahoo_range, fetch_yahoo_chart, compute_simple_returns
 from ...shared.performance import cumulative_return
-from ...shared.risk import compute_beta, compute_volatility, compute_drawdown_stats
-from ...shared.fundamentals import get_fundamentals
+from ...shared.risk import compute_volatility, compute_beta, compute_sharpe, compute_drawdown_stats, compute_sortino
 from ...shared.news import fetch_news_api
 from ...shared.events import next_earnings_date
-# Import the correct prompt builders for JSON generation
-from ..llm.prompts import build_pre_analysis_prompt, build_json_synthesis_prompt
-from ...shared.llm_client import make_llm
-import json
-
-def _load_series(symbol: str, tf_label: str):
-    yf_range = infer_yahoo_range(tf_label)
-    d, c = fetch_yahoo_chart(symbol, yf_range=yf_range, interval="1d")
-    return d, c, compute_simple_returns(c)
+from ...shared.fundamentals import get_fundamentals
 
 
-def analyze_stock(si: StockInput, opt: Optional[StockOptions] = None) -> StockReport:
-    opt = opt or StockOptions()
-    LOG = print if opt.verbose else (lambda *a, **k: None)
-
-    LOG(f"[inputs] symbol={si.symbol} timeframe='{si.timeframe_label}'")
-    dates, closes, rets = _load_series(si.symbol, si.timeframe_label)
-
-    spy_dates, spy_closes = fetch_yahoo_chart("SPY", yf_range=infer_yahoo_range(si.timeframe_label), interval="1d")
-    aligned = align_by_dates({"SPY": (spy_dates, spy_closes), si.symbol.upper(): (dates, closes)})
-    srets = aligned.get(si.symbol.upper(), rets)
-    # Corrected: Use aligned SPY returns for beta calculation
-    spyrets = aligned.get("SPY", compute_simple_returns(spy_closes))
+# --- Simple technical helpers (kept local to avoid adding dependencies) ---
+def _sma(values: List[float], window: int) -> Optional[float]:
+    if not isinstance(values, list) or len(values) < window or window <= 0:
+        return None
+    try:
+        return sum(values[-window:]) / float(window)
+    except Exception:
+        return None
 
 
-    cum_ret = cumulative_return(srets)
-    vol = compute_volatility(srets)
-    beta = compute_beta(srets, spyrets)
-    dd = compute_drawdown_stats(srets)["max_drawdown"]
-    rsi14 = compute_rsi(closes, 14)
-    s20, s50, s200 = sma(closes, 20), sma(closes, 50), sma(closes, 200)
-    pct_hi, pct_lo = pct_from_window_extrema(closes, 252)
+def _rsi_from_prices(closes: List[float], window: int = 14) -> Optional[float]:
+    try:
+        if not closes or len(closes) < window + 1:
+            return None
+        gains: List[float] = []
+        losses: List[float] = []
+        for i in range(1, len(closes)):
+            diff = closes[i] - closes[i-1]
+            gains.append(max(0.0, diff))
+            losses.append(max(0.0, -diff))
+        # Use last `window` periods average
+        avg_gain = sum(gains[-window:]) / window
+        avg_loss = sum(losses[-window:]) / window
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return 100.0 - (100.0 / (1.0 + rs))
+    except Exception:
+        return None
 
-    window_52w = closes[-252:] if len(closes) >= 252 else closes
-    high_52w = max(window_52w) if window_52w else (closes[-1] if closes else 0.0)
-    low_52w = min(window_52w) if window_52w else (closes[-1] if closes else 0.0)
 
-    inst_type, fundamentals, etf_profile_data = get_fundamentals(si.symbol)
-    social_sentiment_data = fundamentals.pop("social_sentiment", None)
+def _pct_from_extrema(closes: List[float], lookback_days: int = 252) -> Tuple[Optional[float], Optional[float]]:
+    """Return (pct_from_52w_high, pct_from_52w_low) using available closes and ~1y lookback."""
+    try:
+        if not closes:
+            return None, None
+        window = min(len(closes), max(1, lookback_days))
+        sub = closes[-window:]
+        hi = max(sub)
+        lo = min(sub)
+        last = sub[-1]
+        pct_from_high = (last / hi - 1.0) if hi else None
+        pct_from_low = (last / lo - 1.0) if lo else None
+        return pct_from_high, pct_from_low
+    except Exception:
+        return None, None
 
-    news_items = fetch_news_api([si.symbol], limit=opt.news_limit) if opt.include_news else []
-    market_news_items = fetch_news_api(['SPY'], limit=3) if opt.include_news else []
-    nxt = next_earnings_date(si.symbol) if opt.include_events else None
 
-    etf_profile = EtfProfile(**etf_profile_data) if inst_type == "etf" and isinstance(etf_profile_data, dict) else None
+def analyze_stock(si: StockInput, options: Optional[AnalysisOptions] = None) -> Dict[str, Any]:
+    """
+    Compute a compact analysis context for a single symbol, mirroring the portfolio flow:
+    - fill aligned return series for symbol and benchmarks (SPY, QQQ)
+    - compute core performance/risk stats
+    - compute light technicals (RSI, SMAs, distances to 52w extrema)
+    - fetch fundamentals and (optionally) news and upcoming events
+    Returns a dict with keys used by the API and prompt builder.
+    """
+    options = options or AnalysisOptions()
+    symbol = (si.symbol or "").upper()
 
-    metrics = StockMetrics(
-        dates=dates, closes=closes, returns=srets, cum_return=cum_ret, volatility=vol,
-        beta_vs_spy=beta, max_drawdown=dd, rsi14=rsi14, sma20=s20, sma50=s50, sma200=s200,
-        pct_from_52w_high=pct_hi, pct_from_52w_low=pct_lo,
-        high_52w=high_52w,
-        low_52w=low_52w,
-        last_close=closes[-1] if closes else 0.0,
-        fundamentals=fundamentals,
-        social_sentiment=social_sentiment_data,
-        news_items=news_items,
-        market_news_items=market_news_items,
-        next_earnings=nxt,
+    # --- 1) Returns for symbol and benchmarks ---
+    rets_map = build_per_symbol_returns([symbol, 'SPY', 'QQQ'], si.timeframe_label)
+    sym_rets = rets_map.get(symbol) or []
+    spy_rets = rets_map.get('SPY') or []
+    qqq_rets = rets_map.get('QQQ') or []
+
+    # If build_per_symbol_returns failed for symbol, try a direct fetch to compute technicals later
+    yf_range = infer_yahoo_range(si.timeframe_label)
+    ds, closes = fetch_yahoo_chart(symbol, yf_range=yf_range, interval='1d')
+    if not sym_rets and closes:
+        sym_rets = compute_simple_returns(closes)
+
+    # --- 2) Core metrics ---
+    has_rets = bool(sym_rets)
+    cum_ret = cumulative_return(sym_rets) if has_rets else None
+    vol = compute_volatility(sym_rets) if has_rets else None
+    mkt_rets = spy_rets or si.market_returns or []
+    beta = compute_beta(sym_rets, mkt_rets) if has_rets else None
+    sharpe = compute_sharpe(sym_rets, si.risk_free_rate) if has_rets else None
+    sortino = compute_sortino(sym_rets) if has_rets else None
+    dd_stats = compute_drawdown_stats(sym_rets) if has_rets else {}
+
+    # --- 3) Benchmarks block ---
+    benchmarks: Dict[str, Dict[str, float]] = {}
+    if spy_rets:
+        from ...shared.performance import cumulative_return as _cr
+        b = _cr(spy_rets)
+        benchmarks['SPY'] = {"cum_return": b, "relative_vs_asset": cum_ret - b}
+    if qqq_rets:
+        from ...shared.performance import cumulative_return as _cr
+        b = _cr(qqq_rets)
+        benchmarks['QQQ'] = {"cum_return": b, "relative_vs_asset": cum_ret - b}
+
+    # --- 4) Technicals ---
+    rsi = _rsi_from_prices(closes) if closes else None
+    sma20 = _sma(closes, 20) if closes else None
+    sma50 = _sma(closes, 50) if closes else None
+    sma200 = _sma(closes, 200) if closes else None
+    pct_hi, pct_lo = _pct_from_extrema(closes, lookback_days=252)
+
+    # --- 5) Fundamentals and instrument type ---
+    inst_type, fund, etf_prof = get_fundamentals(symbol)
+
+    # --- 6) News ---
+    news_items: List[Dict[str, Any]] = []
+    if options.include_news:
+        news_items = fetch_news_api([symbol], limit=max(1, options.news_limit))
+
+    # --- 7) Upcoming events ---
+    upcoming: List[Dict[str, Any]] = []
+    if options.include_events:
+        nxt = next_earnings_date(symbol)
+        if nxt:
+            upcoming.append({"symbol": symbol, "type": "earnings", "date": nxt, "note": "Next earnings date (FMP)"})
+
+    last_price = closes[-1] if closes else None
+
+    cm = ComputedMetrics(
+        cum_return=cum_ret,
+        volatility=vol,
+        beta=beta,
+        sharpe=sharpe,
+        sortino=sortino,
+        max_drawdown=(dd_stats.get("max_drawdown") if dd_stats else None),
+        benchmarks=benchmarks,
+        rsi=rsi,
+        sma20=sma20,
+        sma50=sma50,
+        sma200=sma200,
+        pct_from_52w_high=pct_hi,
+        pct_from_52w_low=pct_lo,
+        last_price=last_price,
         instrument_type=inst_type,
-        etf_profile=etf_profile
+        fundamentals=fund or {},
+        etf_profile=etf_prof or {},
     )
 
-    # --- START OF CORRECTED LLM SECTION ---
-    # Use the proper two-step JSON generation process
-    llm = make_llm(opt.llm_model, opt.llm_host)
+    ctx: Dict[str, Any] = {
+        "stock_input": si,
+        "computed_metrics": cm,
+        "news_items": news_items,
+        "upcoming_events": upcoming,
+    }
 
-    # Step 1: Generate the pre-analysis text
-    pre_analysis_prompt = build_pre_analysis_prompt(si.symbol, metrics)
-    pre_analysis_output = (llm(pre_analysis_prompt) or "").strip()
-
-    # Step 2: Use the pre-analysis to synthesize the final JSON
-    json_synthesis_prompt = build_json_synthesis_prompt(pre_analysis_output)
-    raw_json = (llm(json_synthesis_prompt) or "").strip()
-    # --- END OF CORRECTED LLM SECTION ---
-
+    # Debug logging: context snapshot (guarded)
     try:
-        # More robustly find and extract the JSON object
-        start_index = raw_json.find('{')
-        end_index = raw_json.rfind('}')
-        if start_index != -1 and end_index != -1 and end_index > start_index:
-            json_str = raw_json[start_index : end_index + 1]
-            narrative = json.loads(json_str)
-        else:
-            raise json.JSONDecodeError("Could not find a valid JSON object in the LLM response.", raw_json, 0)
-    except json.JSONDecodeError:
-        LOG(f"Failed to decode LLM response for {si.symbol}: {raw_json}")
-        narrative = {"error": "Failed to generate valid analysis.", "raw_response": raw_json}
+        import os
+        debug_env = os.getenv("HIVEST_DEBUG_STOCK", "0").strip()
+        if debug_env == "1" or getattr(options, "verbose", False):
+            cm_dict = {
+                k: v for k, v in cm.__dict__.items()
+                if k in (
+                    "cum_return","volatility","beta","sharpe","sortino","max_drawdown",
+                    "rsi","sma20","sma50","sma200","pct_from_52w_high","pct_from_52w_low","last_price"
+                ) and v is not None
+            }
+            bench_keys = list((benchmarks or {}).keys())
+            fund_non_empty = [k for k, v in (fund or {}).items() if v not in (None, "", [], {}, 0)]
+            print(f"[stock-debug] symbol={symbol} metrics_keys={list(cm_dict.keys())} bench={bench_keys} fund_keys_non_empty={fund_non_empty[:10]}")
+    except Exception:
+        pass
 
-
-    return StockReport(metrics=metrics, narrative=narrative)
-
-
-def _fallback(m: StockMetrics) -> str:
-    parts = []
-    parts.append(f"Return {m.cum_return*100:.2f}% with vol {m.volatility*100:.2f}% and beta {m.beta_vs_spy:.2f}.")
-    parts.append(f"RSI {m.rsi14:.1f}; price {m.pct_from_52w_high*100:.2f}% off 52w high.")
-    if m.fundamentals:
-        pe = m.fundamentals.get("pe_ttm"); mc = m.fundamentals.get("market_cap")
-        f = []
-        if pe is not None: f.append(f"P/E≈{pe:.1f}")
-        if mc is not None: f.append(f"mkt cap≈{mc/1e9:.1f}B")
-        if f: parts.append("Valuation: " + ", ".join(f) + ".")
-    if m.next_earnings: parts.append(f"Next earnings on {m.next_earnings}.")
-    return " ".join(parts)
+    return ctx
