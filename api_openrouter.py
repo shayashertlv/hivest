@@ -535,21 +535,6 @@ def _sanitize_stock_output(ctx: dict, prompt: str, parsed: dict) -> dict:
         if ss.get("score") is not None:
             ss["score"] = _clamp_score(ss.get("score"))
 
-    # Volatility wording guardrail (align with high beta)
-    try:
-        rip = out.setdefault("riskOpportunityProfile", {})
-        mv = rip.get("marketVolatility")
-        beta = None
-        cm = ctx.get("computed_metrics")
-        if hasattr(cm, "beta"):
-            beta = cm.beta
-        elif isinstance(cm, dict):
-            beta = cm.get("beta")
-        if isinstance(mv, str) and beta is not None:
-            if beta >= 1.5 and "moderate" in mv.lower():
-                rip["marketVolatility"] = "The asset appears highly sensitive to broad market moves."
-    except Exception:
-        pass
 
     # Competitor P/E coherence checks
     try:
@@ -696,17 +681,63 @@ def make_llm_openrouter(system_msg_override: str | None = None):
             try:
                 print(f"[llm] Sending prompt to OpenRouter (attempt {attempt + 1}): model={model}, temp={config['temperature']}, timeout={config['timeout']}s, prompt_len={len(prompt)}")
                 response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=config["timeout"])
+
+                # Log response status
+                print(f"[llm] OpenRouter response: status={response.status_code}")
+
                 response.raise_for_status()
                 data = response.json()
-                content = data["choices"][0]["message"]["content"].strip()
+
+                # Log the full response structure for debugging
+                print(f"[llm] OpenRouter response keys: {list(data.keys())}")
+
+                # Validate response structure
+                if "choices" not in data:
+                    print(f"[llm] ERROR: Response missing 'choices' key. Response: {json.dumps(data, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: missing 'choices'")
+
+                if not data["choices"]:
+                    print(f"[llm] ERROR: 'choices' array is empty. Response: {json.dumps(data, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: empty 'choices' array")
+
+                choice = data["choices"][0]
+                if "message" not in choice:
+                    print(f"[llm] ERROR: Choice missing 'message' key. Choice: {json.dumps(choice, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: choice missing 'message'")
+
+                message = choice["message"]
+                if "content" not in message:
+                    print(f"[llm] ERROR: Message missing 'content' key. Message: {json.dumps(message, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: message missing 'content'")
+
+                content = message["content"]
+                if content is None:
+                    print(f"[llm] ERROR: Content is None. Full response: {json.dumps(data, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: content is None")
+
+                content = content.strip()
                 print(f"[llm] Received response from OpenRouter (chars={len(content)})")
+
+                if len(content) == 0:
+                    print(f"[llm] WARNING: Empty content received. Full response: {json.dumps(data, indent=2)}")
+
                 return content
             except requests.exceptions.RequestException as e:
-                print(f"OpenRouter call failed (attempt {attempt + 1}): {e}")
+                print(f"[llm] OpenRouter call failed (attempt {attempt + 1}): {e}")
+                try:
+                    print(f"[llm] Response text: {response.text[:500]}")
+                except:
+                    pass
                 if attempt < 2:
                     time.sleep((2 ** attempt) + random.uniform(0.5, 1.0))  # Exponential backoff
                 else:
                     raise RuntimeError(f"OpenRouter chat failed after retries: {e}") from e
+            except (KeyError, ValueError, TypeError) as e:
+                print(f"[llm] OpenRouter response parsing failed (attempt {attempt + 1}): {e}")
+                if attempt < 2:
+                    time.sleep((2 ** attempt) + random.uniform(0.5, 1.0))
+                else:
+                    raise RuntimeError(f"OpenRouter response parsing failed after retries: {e}") from e
         return ""  # Should not be reached
 
     return _call

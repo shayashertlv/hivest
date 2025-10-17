@@ -481,21 +481,6 @@ def _sanitize_stock_output(ctx: dict, prompt: str, parsed: dict) -> dict:
         if ss.get("score") is not None:
             ss["score"] = _clamp_score(ss.get("score"))
 
-    # Volatility wording guardrail (align with high beta)
-    try:
-        rip = out.setdefault("riskOpportunityProfile", {})
-        mv = rip.get("marketVolatility")
-        beta = None
-        cm = ctx.get("computed_metrics")
-        if hasattr(cm, "beta"):
-            beta = cm.beta
-        elif isinstance(cm, dict):
-            beta = cm.get("beta")
-        if isinstance(mv, str) and beta is not None:
-            if beta >= 1.5 and "moderate" in mv.lower():
-                rip["marketVolatility"] = "The asset appears highly sensitive to broad market moves."
-    except Exception:
-        pass
 
     # Competitor P/E coherence checks
     try:
