@@ -81,11 +81,11 @@ def _get_openrouter_timeout() -> int:
 
 
 def _get_openrouter_temperature() -> float:
-    val = os.getenv("OPENROUTER_TEMPERATURE", "0.4")
+    val = os.getenv("OPENROUTER_TEMPERATURE", "0.5")
     try:
         return float(val)
     except Exception:
-        return 0.4
+        return 0.5
 
 
 def _get_openrouter_config() -> dict:
@@ -95,9 +95,9 @@ def _get_openrouter_config() -> dict:
     except (ValueError, TypeError):
         timeout = 180
     try:
-        temperature = float(os.getenv("OPENROUTER_TEMPERATURE", "0.2"))
+        temperature = float(os.getenv("OPENROUTER_TEMPERATURE", "0.5"))
     except (ValueError, TypeError):
-        temperature = 0.2
+        temperature = 0.5
     cfg = {"timeout": timeout, "temperature": temperature}
     print(f"[llm] OpenRouter config loaded: timeout={cfg['timeout']}s, temperature={cfg['temperature']}")
     return cfg
@@ -773,7 +773,7 @@ def make_llm_openrouter(system_msg_override: str | None = None):
                 {"role": "user", "content": prompt}
             ],
             "temperature": config["temperature"],
-            "max_tokens": 4096,
+            "max_tokens": 35000,
             # Ask for strict JSON from compatible providers/models; ignored otherwise
             "response_format": {"type": "json_object"}
         }
