@@ -89,9 +89,13 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
                     # Calculate margin changes YoY
                     if yoy_q:
                         if latest_q.get("grossProfitRatio") is not None and yoy_q.get("grossProfitRatio") is not None:
-                            out["quarterly_gross_margin_yoy"] = float(yoy_q["grossProfitRatio"])
+                            curr_gross = float(latest_q["grossProfitRatio"])
+                            yoy_gross = float(yoy_q["grossProfitRatio"])
+                            out["quarterly_gross_margin_yoy"] = curr_gross - yoy_gross
                         if latest_q.get("operatingIncomeRatio") is not None and yoy_q.get("operatingIncomeRatio") is not None:
-                            out["quarterly_operating_margin_yoy"] = float(yoy_q["operatingIncomeRatio"])
+                            curr_op = float(latest_q["operatingIncomeRatio"])
+                            yoy_op = float(yoy_q["operatingIncomeRatio"])
+                            out["quarterly_operating_margin_yoy"] = curr_op - yoy_op
 
         except Exception:
             pass
@@ -219,6 +223,11 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
                     surprise_pct = float(sp) if sp is not None else None
                 except Exception:
                     surprise_pct = None
+
+                # Calculate surprise percentage if not provided by API
+                if surprise_pct is None and actual_f is not None and est_f is not None and est_f != 0:
+                    surprise_pct = ((actual_f - est_f) / abs(est_f)) * 100
+
                 bottom = None
                 if actual_f is not None and est_f is not None:
                     if actual_f > est_f * 1.01:
@@ -244,15 +253,19 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
                     if out.get("quarterly_revenue_growth_yoy") is not None:
                         earnings_dict["revenueGrowthYoY"] = out["quarterly_revenue_growth_yoy"]
 
-                    # Add margin data if available
-                    if out.get("quarterly_gross_margin") is not None:
-                        earnings_dict["grossMargin"] = out["quarterly_gross_margin"]
-                    if out.get("quarterly_gross_margin_yoy") is not None:
-                        earnings_dict["grossMarginYoY"] = out["quarterly_gross_margin_yoy"]
-                    if out.get("quarterly_operating_margin") is not None:
-                        earnings_dict["operatingMargin"] = out["quarterly_operating_margin"]
-                    if out.get("quarterly_operating_margin_yoy") is not None:
-                        earnings_dict["operatingMarginYoY"] = out["quarterly_operating_margin_yoy"]
+                    # Add margin data if available (only meaningful when company has revenue)
+                    actual_revenue = out.get("quarterly_revenue")
+                    has_revenue = actual_revenue is not None and actual_revenue > 0
+
+                    if has_revenue:
+                        if out.get("quarterly_gross_margin") is not None:
+                            earnings_dict["grossMargin"] = out["quarterly_gross_margin"]
+                        if out.get("quarterly_gross_margin_yoy") is not None:
+                            earnings_dict["grossMarginYoY"] = out["quarterly_gross_margin_yoy"]
+                        if out.get("quarterly_operating_margin") is not None:
+                            earnings_dict["operatingMargin"] = out["quarterly_operating_margin"]
+                        if out.get("quarterly_operating_margin_yoy") is not None:
+                            earnings_dict["operatingMarginYoY"] = out["quarterly_operating_margin_yoy"]
 
                     # Add buyback data if available
                     if out.get("buyback_amount") is not None:
