@@ -10,20 +10,30 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv, find_dotenv
 
-# --- Environment Setup ---
-# Resolve project root and load the .env file for API keys and configuration
+# Resolve project root relative to this file
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-dotenv_path = find_dotenv(usecwd=False) or os.path.join(PROJECT_ROOT, ".env")
+
+# Find the nearest `.env` walking up from this file; fall back to project root
+dotenv_path = find_dotenv(usecwd=False)
+if not dotenv_path:
+    dotenv_path = os.path.join(PROJECT_ROOT, ".env")
+
+# Load it (override ensures PyCharm’s run config doesn't mask changes)
 load_dotenv(dotenv_path=dotenv_path, override=True)
 
-# Ensure package imports work when running this file directly
-if __package__ is None or __package__ == "":
-    if PROJECT_ROOT not in sys.path:
-        sys.path.insert(0, PROJECT_ROOT)
+# --- Optional debug (remove after it works) ---
+print("Using .env:", dotenv_path)
+print("OPENROUTER_API_KEY present:", bool(os.getenv("OPENROUTER_API_KEY")))
+app = Flask(__name__)
 
-# --- Hivest Imports ---
-# Portfolio Analysis
+# Ensure package imports work when running this file directly: `python hivest\\api_openrouter_testing.py`
+if __package__ is None or __package__ == "":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_dir)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 from hivest.portfolio_analysis.processing.engine import holdings_from_user_positions, analyze_portfolio
 from hivest.portfolio_analysis.processing.models import PortfolioInput, AnalysisOptions as PortfolioAnalysisOptions
 from hivest.portfolio_analysis.llm.prompts import build_portfolio_prompt
@@ -38,15 +48,59 @@ from hivest.stock_analysis.processing.engine import analyze_stock
 from hivest.stock_analysis.processing.models import StockInput, AnalysisOptions as StockAnalysisOptions
 from hivest.stock_analysis.llm.prompts import build_stock_prompt
 
-# --- OpenRouter LLM Client ---
+
+# --- OpenRouter LLM helper (replicates llm_client.make_llm flow, but for OpenRouter) ---
+
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL="openai/gpt-oss-120b"
 
+def _get_openrouter_model(passed: str | None = None) -> str:
+    # Priority: explicit param -> env -> default mapping similar to llama3:8b
+    if passed and isinstance(passed, str) and passed.strip():
+        model_in = passed.strip()
+    else:
+        model_in = (os.getenv("OPENROUTER_MODEL", "").strip() or "")
 
-def _get_openrouter_model() -> str:
-    """Gets the OpenRouter model from environment variables or returns a default."""
-    model_in = os.getenv("OPENROUTER_MODEL", "").strip() or "openai/gpt-oss-120b"
+    if not model_in:
+        # Default to a close analogue of llama3:8b instruct on OpenRouter
+        return "openai/gpt-oss-120b"
 
+    # Light mapping for common shorthand used by api.py ("llama3:8b")
+    low = model_in.lower()
+    if low.startswith("llama3") or "llama3:8b" in low:
+        return "meta-llama/llama-3.1-8b-instruct"
     return model_in
+
+
+def _get_openrouter_timeout() -> int:
+    val = os.getenv("OPENROUTER_TIMEOUT", "180")
+    try:
+        return int(val)
+    except Exception:
+        return 180
+
+
+def _get_openrouter_temperature() -> float:
+    val = os.getenv("OPENROUTER_TEMPERATURE", "0.4")
+    try:
+        return float(val)
+    except Exception:
+        return 0.4
+
+
+def _get_openrouter_config() -> dict:
+    """Returns a dictionary with OpenRouter timeout and temperature settings."""
+    try:
+        timeout = int(os.getenv("OPENROUTER_TIMEOUT", "180"))
+    except (ValueError, TypeError):
+        timeout = 180
+    try:
+        temperature = float(os.getenv("OPENROUTER_TEMPERATURE", "0.2"))
+    except (ValueError, TypeError):
+        temperature = 0.2
+    cfg = {"timeout": timeout, "temperature": temperature}
+    print(f"[llm] OpenRouter config loaded: timeout={cfg['timeout']}s, temperature={cfg['temperature']}")
+    return cfg
 
 
 def _is_openrouter_configured() -> bool:
@@ -640,19 +694,46 @@ def _sanitize_stock_output(ctx: dict, prompt: str, parsed: dict) -> dict:
     return out
 
 
-def _get_openrouter_config() -> dict:
-    """Returns a dictionary with OpenRouter timeout and temperature settings."""
-    try:
-        timeout = int(os.getenv("OPENROUTER_TIMEOUT", "180"))
-    except (ValueError, TypeError):
-        timeout = 180
-    try:
-        temperature = float(os.getenv("OPENROUTER_TEMPERATURE", "0.2"))
-    except (ValueError, TypeError):
-        temperature = 0.2
-    cfg = {"timeout": timeout, "temperature": temperature}
-    print(f"[llm] OpenRouter config loaded: timeout={cfg['timeout']}s, temperature={cfg['temperature']}")
-    return cfg
+def _post_openrouter_chat(payload: dict, timeout: int, retries: int = 2, backoff: float = 1.0) -> dict:
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Missing OPENROUTER_API_KEY environment variable.")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    # Optional helpful headers for OpenRouter analytics
+    referer = os.getenv("OPENROUTER_SITE_URL") or os.getenv("HTTP_REFERER")
+    if referer:
+        headers["HTTP-Referer"] = referer
+    app_name = os.getenv("OPENROUTER_APP_NAME") or os.getenv("X_TITLE")
+    if app_name:
+        headers["X-Title"] = app_name
+
+    last_ex = None
+    last_status = None
+    last_text = None
+    for attempt in range(retries + 1):
+        try:
+            r = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=timeout)
+            last_status = r.status_code
+            try:
+                last_text = r.text
+            except Exception:
+                last_text = None
+            r.raise_for_status()
+            return r.json()
+        except Exception as ex:
+            last_ex = ex
+            if attempt < retries:
+                sleep_for = backoff * (2 ** attempt) + random.uniform(0.1, 0.3)
+                try:
+                    time.sleep(sleep_for)
+                except Exception:
+                    time.sleep(backoff)
+    detail = f"status={last_status}, body={last_text[:500] if isinstance(last_text, str) else last_text}"
+    raise RuntimeError(f"OpenRouter chat failed after retries: {last_ex} | {detail}")
 
 
 def make_llm_openrouter(system_msg_override: str | None = None):
@@ -693,23 +774,71 @@ def make_llm_openrouter(system_msg_override: str | None = None):
             ],
             "temperature": config["temperature"],
             "max_tokens": 4096,
+            # Ask for strict JSON from compatible providers/models; ignored otherwise
+            "response_format": {"type": "json_object"}
         }
 
         for attempt in range(3):  # Simple retry logic
             try:
                 print(f"[llm] Sending prompt to OpenRouter (attempt {attempt + 1}): model={model}, temp={config['temperature']}, timeout={config['timeout']}s, prompt_len={len(prompt)}")
                 response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=config["timeout"])
+
+                # Log response status
+                print(f"[llm] OpenRouter response: status={response.status_code}")
+
                 response.raise_for_status()
                 data = response.json()
-                content = data["choices"][0]["message"]["content"].strip()
+
+                # Log the full response structure for debugging
+                print(f"[llm] OpenRouter response keys: {list(data.keys())}")
+
+                # Validate response structure
+                if "choices" not in data:
+                    print(f"[llm] ERROR: Response missing 'choices' key. Response: {json.dumps(data, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: missing 'choices'")
+
+                if not data["choices"]:
+                    print(f"[llm] ERROR: 'choices' array is empty. Response: {json.dumps(data, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: empty 'choices' array")
+
+                choice = data["choices"][0]
+                if "message" not in choice:
+                    print(f"[llm] ERROR: Choice missing 'message' key. Choice: {json.dumps(choice, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: choice missing 'message'")
+
+                message = choice["message"]
+                if "content" not in message:
+                    print(f"[llm] ERROR: Message missing 'content' key. Message: {json.dumps(message, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: message missing 'content'")
+
+                content = message["content"]
+                if content is None:
+                    print(f"[llm] ERROR: Content is None. Full response: {json.dumps(data, indent=2)}")
+                    raise ValueError("Invalid OpenRouter response: content is None")
+
+                content = content.strip()
                 print(f"[llm] Received response from OpenRouter (chars={len(content)})")
+
+                if len(content) == 0:
+                    print(f"[llm] WARNING: Empty content received. Full response: {json.dumps(data, indent=2)}")
+
                 return content
             except requests.exceptions.RequestException as e:
-                print(f"OpenRouter call failed (attempt {attempt + 1}): {e}")
+                print(f"[llm] OpenRouter call failed (attempt {attempt + 1}): {e}")
+                try:
+                    print(f"[llm] Response text: {response.text[:500]}")
+                except:
+                    pass
                 if attempt < 2:
                     time.sleep((2 ** attempt) + random.uniform(0.5, 1.0))  # Exponential backoff
                 else:
                     raise RuntimeError(f"OpenRouter chat failed after retries: {e}") from e
+            except (KeyError, ValueError, TypeError) as e:
+                print(f"[llm] OpenRouter response parsing failed (attempt {attempt + 1}): {e}")
+                if attempt < 2:
+                    time.sleep((2 ** attempt) + random.uniform(0.5, 1.0))
+                else:
+                    raise RuntimeError(f"OpenRouter response parsing failed after retries: {e}") from e
         return ""  # Should not be reached
 
     return _call
@@ -771,8 +900,10 @@ def _validate_required_fields(parsed: dict, ctx: dict) -> tuple[bool, list[str]]
     return is_valid, missing
 
 
-# --- Flask Application ---
+# --- Flask app replicating hivest/api.py but using OpenRouter ---
+
 app = Flask(__name__)
+# Enable CORS for all routes
 CORS(app)
 
 

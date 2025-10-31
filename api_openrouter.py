@@ -857,11 +857,6 @@ def _validate_required_fields(parsed: dict, ctx: dict) -> tuple[bool, list[str]]
     """
     missing = []
 
-    # Check aiDailyBrief (must exist and not be empty string)
-    ai_brief = parsed.get("aiDailyBrief")
-    if not ai_brief or not isinstance(ai_brief, str) or not ai_brief.strip():
-        missing.append("aiDailyBrief")
-
     # Check sentimentDial structure
     sentiment_dial = parsed.get("sentimentDial")
     if not isinstance(sentiment_dial, dict):

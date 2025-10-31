@@ -61,7 +61,7 @@ def _fundamentals_block(fund: dict) -> str:
         "grossMargin": fund.get("grossMargin"),
         "debtToEquity": fund.get("debtToEquity"),
         "analyst_target_price": fund.get("analyst_target_price"),
-        "earnings": fund.get("earnings"),  # {date, actualEPS, estimatedEPS, surprisePct, bottomLine}
+        "earnings": fund.get("earnings"),  # {date, actualEPS, estimatedEPS, surprisePct, bottomLine, actualRevenue, estimatedRevenue, revenueGrowthYoY, grossMargin, grossMarginYoY, operatingMargin, operatingMarginYoY, buybackAmount, nextQuarterEstimatedEPS, nextQuarterEstimatedRevenue, nextQuarterEstimateDate}
         # add more keys here if needed, but keep it compact
     }
     # Format values and filter, but be careful not to filter out earnings dict even if some fields are None
@@ -278,21 +278,25 @@ def build_stock_prompt(ctx: Dict[str, Any]) -> str:
         "      - Sideways/mixed → 50\n"
         "      - Deteriorating/downtrend → 40\n"
         "    If none are inferable, use 50. Clamp 0–100.\n\n"
-        "=== AI DAILY BRIEF (MANDATORY) ===\n"
-"- Write 1–2 short sentences focused solely on the asset's latest price movement from the LAST TRADING DAY.\n"
-"- Use DATA.LastTradingDayPriceChange to describe the direction and magnitude of the change. If LastTradingDayPriceChange shows 'n/a' or '(previous close unavailable)', write a brief statement acknowledging the closing price without speculating about movement.\n"
-"- Make it distinct from newsSummary by emphasizing the immediate market reaction without referencing any drivers or events.\n"
-"- Be intriguing and specific to the asset; avoid boilerplate. Prefer dynamic verbs (\"surged\", \"tumbled\", \"consolidated\") when change data is available.\n"
-"- Use only information present in DATA; do not speculate or attribute causes.\n\n"
         "=== CONVERSION TO PLAIN LANGUAGE ===\n"
         "- Convert raw metrics into plain insights (e.g., \"short-term looks overbought\" instead of \"RSI=72\"; \"moves more aggressively than the market\" instead of \"beta=1.8\").\n"
         "- Keep tone concise and decision-oriented; no hype.\n\n"
         "=== EARNINGS EXTRACTION (optional) ===\n"
         "Include \"quarterlyReport\" ONLY if DATA.Fundamentals.earnings exists:\n"
-        "- bottomLine = one of \"beat\", \"miss\", \"in line\". Append a space and \"+\" if positive surprise; a space and \"−\" if negative surprise (e.g., \"beat +\"). For \"in line\", append nothing.\n"
-        "- keyPoints is an array:\n"
-        "  • First element: \"Reported EPS of $<actual> vs. estimate of $<estimate>\" with EPS rounded to two decimals.\n"
-        "  • Optional second element: \"Next earnings on YYYY-MM-DD\" if DATA.UpcomingEvents includes an earnings date.\n"
+        "- bottomLine = one of \"beat\", \"miss\", \"in line\" based on EPS performance. Append a space and \"+\" if positive surprise; a space and \"−\" if negative surprise (e.g., \"beat +\"). For \"in line\", append nothing.\n"
+        "- keyPoints is an array with the following potential elements (include only if the corresponding data is available in DATA.Fundamentals.earnings):\n"
+        "  • EPS Performance (REQUIRED if actualEPS and estimatedEPS exist): \"Reported EPS of $<actual> vs. estimate of $<estimate>, beat/missed by X%\" where the percentage difference is calculated as ((actual - estimate) / |estimate|) * 100, rounded to the nearest whole number. Use \"beat by\" if actual > estimate, \"missed by\" if actual < estimate, or omit the percentage if equal.\n"
+        "  • Revenue Performance (if actualRevenue exists): \"Revenue of $<X>B\" followed by:\n"
+        "    - If revenueGrowthYoY exists: add \" (+X.X% YoY)\" or \" (-X.X% YoY)\"\n"
+        "    - If both actualRevenue and estimatedRevenue exist: add \", beat estimates of $<Y>B by Z%\" or \", missed estimates of $<Y>B by Z%\" where Z is calculated as ((actual - estimate) / estimate) * 100, rounded to the nearest whole number. Use \"beat...by\" if actual > estimate, \"missed...by\" if actual < estimate, or omit the percentage if equal.\n"
+        "    - Format revenue in billions with 1-2 decimals (e.g., \"$5.2B\"). Use \"M\" for millions if revenue < $1B.\n"
+        "  • Next Quarter EPS Estimate (if nextQuarterEstimatedEPS exists): \"Next quarter estimated EPS: $<estimate>\" formatted to two decimals.\n"
+        "  • Next Quarter Revenue Estimate (if nextQuarterEstimatedRevenue exists): \"Next quarter estimated revenue: $<estimate>B\" formatted in billions with 1-2 decimals (use \"M\" for millions if < $1B).\n"
+        "\n"
+        "IMPORTANT RULES:\n"
+        "- If a data field is missing or None, OMIT that keyPoint entirely\n"
+        "- Maintain the order: EPS Performance → Revenue Performance → Next Quarter EPS Estimate → Next Quarter Revenue Estimate\n"
+        "- Each keyPoint must be a complete, informative sentence\n"
         "If earnings are absent, omit the entire \"quarterlyReport\" object.\n\n"
         "=== NEWS SUMMARY (MANDATORY) ===\n"
         "- \"newsSummary\" MUST ALWAYS be present as an array.\n"
@@ -300,7 +304,7 @@ def build_stock_prompt(ctx: Dict[str, Any]) -> str:
         "- Materiality criteria: News is material if it describes substantive events, actions, or outcomes directly involving the asset, such as earnings releases, product launches, mergers/acquisitions, regulatory approvals/denials, executive changes, lawsuits, partnerships, or guidance updates. Vague mentions, passive listings in watchlists/analyses, or generic market commentary without specific asset-impacting details are NOT material.\n"
         "- Paraphrase and summarize the news events in your own words as bullet points; do not copy-paste headlines or text directly. Provide brief context or implications for the asset where relevant from DATA, keeping it concise.\n"
         "- Ensure bullets cover distinct aspects; merge closely related events into a single bullet to avoid repetition.\n"
-        "- Each string must end with \"+\" if the bullet point is positive for the asset, \"−\" if negative. For neutral/mixed items, end with no symbol.\n"
+        "- Each string must end with \"(+)\" if the bullet point is positive for the asset, \"(−)\" always end with either!\n"
         "- Use tight, informative phrasing with a clear action/outcome (\"wins contract…\", \"guidance cut…\", \"launches product…\", \"regulatory inquiry…\"). No sources/citations, no duplication, no fluff.\n"
         "- Avoid passive listings like 'featured in analysis' or 'mentioned in watchlist'; focus strictly on substantive events, actions, or outcomes directly involving the asset as described in DATA.\n"
         "- If DATA contains no news or only non-material/vague mentions, output an empty array [].\n\n"
@@ -312,15 +316,13 @@ def build_stock_prompt(ctx: Dict[str, Any]) -> str:
         "- Determinism: required derivations use fixed rules above (baseline 50; social = news − 5; clamps applied).\n\n"
         "=== VALIDATION CHECKLIST BEFORE YOU OUTPUT ===\n"
         "- Output is EXACTLY one JSON object; valid syntax; double quotes; no trailing commas; no extra top-level keys beyond those in the structure below.\n"
-        "- \"aiDailyBrief\" MUST be present and MUST NOT be empty. Write at least one sentence using DATA.LastTradingDayPriceChange.\n"
         "- \"sentimentDial\" MUST be present with EXACTLY these three keys (exact spelling, case-sensitive): \"newsSentiment\", \"socialSentiment\", \"analystSentiment\". Each must have structure {\"score\": integer}. Scores MUST be integers in [0,100], no decimals, no null values.\n"
-        "- \"aiSummary.newsSummary\" present (array). If news exists in DATA → 1–5 asset-specific bullets with clear actions/outcomes; each ends with \"+\" or \"−\" for positive/negative, and no symbol for neutral. No sources, no fluff/duplicates, no passive listings.\n"
-        "- If \"aiSummary.quarterlyReport\" is present: bottomLine is \"beat\"/\"miss\"/\"in line\" with proper \"+\" or \"−\" only when beat/miss; EPS formatted to two decimals; optional next earnings date formatted YYYY-MM-DD.\n"
+        "- \"aiSummary.newsSummary\" present (array). If news exists in DATA → 1–3 asset-specific bullets with clear actions/outcomes; each ends with \"+\" or \"−\" for positive/negative, and no symbol for neutral. No sources, no fluff/duplicates, no passive listings.\n"
+        "- If \"aiSummary.quarterlyReport\" is present: bottomLine is \"beat\"/\"miss\"/\"inline\"; EPS formatted to two decimals.\n"
         "- All three sentiment scores MUST be integers in [0,100]; Social derived = News − 5 (clamped) when social data is missing. Never output null for any sentiment score.\n"
         "- No invented facts; all content traceable to DATA.\n\n"
         "=== JSON STRUCTURE (return this shape; omit any key whose content would be empty, EXCEPT \"aiSummary.newsSummary\" which must exist and may be empty) ===\n"
         "{\n"
-        "  \"aiDailyBrief\": \"\",\n"
         "  \"sentimentDial\": {\n"
         "    \"newsSentiment\": { \"score\": 0 },\n"
         "    \"socialSentiment\": { \"score\": 0 },\n"
@@ -348,6 +350,10 @@ def build_stock_prompt(ctx: Dict[str, Any]) -> str:
     elif last_px is not None:
         price_change_line = f"last_close={last_px:.2f} (previous close unavailable)"
 
+    # SPY YTD benchmark
+    spy_ytd = getattr(cm, 'spy_ytd_return', None)
+    spy_ytd_line = FMT_PCT(spy_ytd) if spy_ytd is not None else "n/a"
+
     payload = (
         f"Symbol: {symbol}\n"
         f"InstrumentType: {inst_type}\n"
@@ -356,6 +362,7 @@ def build_stock_prompt(ctx: Dict[str, Any]) -> str:
         f"LastTradingDayPriceChange: {price_change_line}\n"
         f"Performance: {perf_line}\n"
         f"Benchmarks:\n{bench_block}\n"
+        f"SPY_YTD_Performance: {spy_ytd_line}\n"
         f"Technicals: {tech_line}\n"
         f"ChartHints: {chart_hints_block}\n"
         f"Fundamentals: {_fundamentals_block(fund)}\n"

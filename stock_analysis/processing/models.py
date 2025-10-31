@@ -63,6 +63,9 @@ class ComputedMetrics:
     fundamentals: Dict[str, Any] = field(default_factory=dict)
     etf_profile: Dict[str, Any] = field(default_factory=dict)
 
+    # SPY YTD benchmark (always YTD regardless of user timeframe)
+    spy_ytd_return: Optional[float] = None
+
 
 @dataclass
 class StockAnalysisContext:

@@ -77,6 +77,14 @@ def analyze_stock(si: StockInput, options: Optional[AnalysisOptions] = None) -> 
     spy_rets = rets_map.get('SPY') or []
     qqq_rets = rets_map.get('QQQ') or []
 
+    # Fetch SPY YTD for comparison (always YTD regardless of user timeframe)
+    spy_ytd_rets = []
+    if si.timeframe_label.lower() != 'ytd':  # Only fetch if not already YTD
+        rets_ytd = build_per_symbol_returns(['SPY'], 'ytd')
+        spy_ytd_rets = rets_ytd.get('SPY') or []
+    else:
+        spy_ytd_rets = spy_rets  # Already YTD
+
     # If build_per_symbol_returns failed for symbol, try a direct fetch to compute technicals later
     yf_range = infer_yahoo_range(si.timeframe_label)
     ds, closes = fetch_yahoo_chart(symbol, yf_range=yf_range, interval='1d')
@@ -92,6 +100,9 @@ def analyze_stock(si: StockInput, options: Optional[AnalysisOptions] = None) -> 
     sharpe = compute_sharpe(sym_rets, si.risk_free_rate) if has_rets else None
     sortino = compute_sortino(sym_rets) if has_rets else None
     dd_stats = compute_drawdown_stats(sym_rets) if has_rets else {}
+
+    # Calculate SPY YTD cumulative return
+    spy_ytd_cum = cumulative_return(spy_ytd_rets) if spy_ytd_rets else None
 
     # --- 3) Benchmarks block ---
     benchmarks: Dict[str, Dict[str, float]] = {}
@@ -155,6 +166,7 @@ def analyze_stock(si: StockInput, options: Optional[AnalysisOptions] = None) -> 
         instrument_type=inst_type,
         fundamentals=fund or {},
         etf_profile=etf_prof or {},
+        spy_ytd_return=spy_ytd_cum,
     )
 
     ctx: Dict[str, Any] = {
