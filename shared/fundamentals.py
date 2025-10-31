@@ -71,72 +71,7 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
         except Exception:
             pass
 
-        # --- Step 3: Fetch Social Sentiment ---
-        try:
-            print(f"[fundamentals] Fetching social sentiment for {sym}...")
-            r = sess.get(f"https://financialmodelingprep.com/api/v4/social-sentiment", params={"symbol": sym, "apikey": fmp}, timeout=7)
-            print(f"[fundamentals] Social sentiment response: status={r.status_code}, ok={r.ok}, content_length={len(r.content)}")
-
-            # Try to parse JSON regardless of status to see what we got
-            try:
-                social_data = r.json()
-                print(f"[fundamentals] Social sentiment raw JSON: {social_data}")
-            except Exception as json_err:
-                print(f"[fundamentals] Social sentiment: failed to parse JSON - {json_err}")
-                print(f"[fundamentals] Social sentiment raw text (first 500 chars): {r.text[:500]}")
-                social_data = None
-
-            if r.ok and social_data:
-                print(f"[fundamentals] Social sentiment data type: {type(social_data).__name__}")
-                if isinstance(social_data, list):
-                    print(f"[fundamentals] Social sentiment data length: {len(social_data)}")
-                    if social_data:
-                        # If the API returns a list, take the first item
-                        out["social_sentiment"] = social_data[0]
-                        print(f"[fundamentals] Social sentiment keys: {list(social_data[0].keys()) if isinstance(social_data[0], dict) else 'not a dict'}")
-                    else:
-                        print(f"[fundamentals] Social sentiment: empty list returned")
-                elif isinstance(social_data, dict):
-                    out["social_sentiment"] = social_data
-                    print(f"[fundamentals] Social sentiment keys: {list(social_data.keys())}")
-                else:
-                    print(f"[fundamentals] Social sentiment: unexpected data structure")
-            else:
-                if not r.ok:
-                    print(f"[fundamentals] Social sentiment: HTTP error {r.status_code}")
-                elif social_data is None:
-                    print(f"[fundamentals] Social sentiment: null/empty JSON response")
-                elif isinstance(social_data, list) and len(social_data) == 0:
-                    print(f"[fundamentals] Social sentiment: empty list (no data for {sym})")
-                else:
-                    print(f"[fundamentals] Social sentiment: falsy response - {social_data}")
-        except Exception as e:
-            print(f"[fundamentals] Error fetching social sentiment: {e}")
-            import traceback
-            traceback.print_exc()
-            
-        # --- Step 4: Fetch Analyst Price Targets ---
-        try:
-            print(f"[fundamentals] Fetching analyst price target consensus for {sym}...")
-            r = sess.get(f"https://financialmodelingprep.com/api/v4/price-target-consensus", params={"symbol": sym, "apikey": fmp}, timeout=7)
-            print(f"[fundamentals] Price target consensus response: status={r.status_code}, ok={r.ok}")
-            if r.ok and isinstance(r.json(), list) and r.json():
-                data = r.json()
-                print(f"[fundamentals] Price target consensus data length: {len(data)}")
-                if data:
-                    item = data[0]
-                    print(f"[fundamentals] Price target consensus keys: {list(item.keys())}")
-                    # FMP v4 price-target-consensus returns: targetHigh, targetLow, targetConsensus, targetMedian
-                    target_price = item.get("targetConsensus") or item.get("targetMedian")
-                    print(f"[fundamentals] targetConsensus = {target_price}")
-                    if target_price is not None:
-                        out["analyst_target_price"] = float(target_price)
-            else:
-                print(f"[fundamentals] Price target consensus: empty or invalid response")
-        except Exception as e:
-            print(f"[fundamentals] Error fetching price target consensus: {e}")
-
-        # --- Step 5: Fetch last earnings surprise (for quarterly bottom-line) ---
+        # --- Step 3: Fetch last earnings surprise (for quarterly bottom-line) ---
         try:
             print(f"[fundamentals] Fetching earnings surprises for {sym}...")
             r = sess.get(f"https://financialmodelingprep.com/api/v3/earnings-surprises/{sym}", params={"limit": 1, "apikey": fmp}, timeout=7)
@@ -201,5 +136,70 @@ def get_fundamentals(symbol: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
                 etf_data["top_holdings"] = [{"symbol": h.get("asset"), "weight": h.get("weightPercentage")} for h in r.json()[:5]]
         except Exception:
             pass
-            
+
+    # --- Fetch Social Sentiment (for ALL instrument types) ---
+    try:
+        print(f"[fundamentals] Fetching social sentiment for {sym}...")
+        r = sess.get(f"https://financialmodelingprep.com/api/v4/social-sentiment", params={"symbol": sym, "apikey": fmp}, timeout=7)
+        print(f"[fundamentals] Social sentiment response: status={r.status_code}, ok={r.ok}, content_length={len(r.content)}")
+
+        # Try to parse JSON regardless of status to see what we got
+        try:
+            social_data = r.json()
+            print(f"[fundamentals] Social sentiment raw JSON: {social_data}")
+        except Exception as json_err:
+            print(f"[fundamentals] Social sentiment: failed to parse JSON - {json_err}")
+            print(f"[fundamentals] Social sentiment raw text (first 500 chars): {r.text[:500]}")
+            social_data = None
+
+        if r.ok and social_data:
+            print(f"[fundamentals] Social sentiment data type: {type(social_data).__name__}")
+            if isinstance(social_data, list):
+                print(f"[fundamentals] Social sentiment data length: {len(social_data)}")
+                if social_data:
+                    # If the API returns a list, take the first item
+                    out["social_sentiment"] = social_data[0]
+                    print(f"[fundamentals] Social sentiment keys: {list(social_data[0].keys()) if isinstance(social_data[0], dict) else 'not a dict'}")
+                else:
+                    print(f"[fundamentals] Social sentiment: empty list returned")
+            elif isinstance(social_data, dict):
+                out["social_sentiment"] = social_data
+                print(f"[fundamentals] Social sentiment keys: {list(social_data.keys())}")
+            else:
+                print(f"[fundamentals] Social sentiment: unexpected data structure")
+        else:
+            if not r.ok:
+                print(f"[fundamentals] Social sentiment: HTTP error {r.status_code}")
+            elif social_data is None:
+                print(f"[fundamentals] Social sentiment: null/empty JSON response")
+            elif isinstance(social_data, list) and len(social_data) == 0:
+                print(f"[fundamentals] Social sentiment: empty list (no data for {sym})")
+            else:
+                print(f"[fundamentals] Social sentiment: falsy response - {social_data}")
+    except Exception as e:
+        print(f"[fundamentals] Error fetching social sentiment: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # --- Fetch Analyst Price Targets (for ALL instrument types) ---
+    try:
+        print(f"[fundamentals] Fetching analyst price target consensus for {sym}...")
+        r = sess.get(f"https://financialmodelingprep.com/api/v4/price-target-consensus", params={"symbol": sym, "apikey": fmp}, timeout=7)
+        print(f"[fundamentals] Price target consensus response: status={r.status_code}, ok={r.ok}")
+        if r.ok and isinstance(r.json(), list) and r.json():
+            data = r.json()
+            print(f"[fundamentals] Price target consensus data length: {len(data)}")
+            if data:
+                item = data[0]
+                print(f"[fundamentals] Price target consensus keys: {list(item.keys())}")
+                # FMP v4 price-target-consensus returns: targetHigh, targetLow, targetConsensus, targetMedian
+                target_price = item.get("targetConsensus") or item.get("targetMedian")
+                print(f"[fundamentals] targetConsensus = {target_price}")
+                if target_price is not None:
+                    out["analyst_target_price"] = float(target_price)
+        else:
+            print(f"[fundamentals] Price target consensus: empty or invalid response")
+    except Exception as e:
+        print(f"[fundamentals] Error fetching price target consensus: {e}")
+
     return inst_type, out, etf_data

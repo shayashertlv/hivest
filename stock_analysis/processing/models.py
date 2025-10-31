@@ -54,6 +54,9 @@ class ComputedMetrics:
 
     # Spot price for sanity checks (optional)
     last_price: Optional[float] = None
+    prev_close: Optional[float] = None  # Previous day's close
+    daily_change: Optional[float] = None  # Last day's price change (fraction)
+    daily_change_pct: Optional[float] = None  # Last day's price change (percentage)
 
     # Fundamentals and instrument typing
     instrument_type: str = "stock"  # "stock" | "etf" | "crypto" (best-effort)

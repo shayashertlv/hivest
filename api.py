@@ -54,24 +54,106 @@ def _is_openrouter_configured() -> bool:
 
 
 def _extract_json_object(text: str):
-    """Best-effort extraction of a top-level JSON object from a string."""
+    """Robustly extract a single top-level JSON object from model output.
+
+    Strategy:
+    1) Fast path: direct json.loads
+    2) Extract the first balanced {...} object (brace matching with string awareness)
+    3) Attempt progressive repairs:
+       - Strip code fences/backticks and BOM/zero-width spaces
+       - Normalize smart quotes to standard double quotes
+       - Remove trailing commas before } or ]
+       - Remove stray standalone numeric lines between properties (common LLM glitch)
+       - Insert missing commas between object members when a newline separates members without a comma
+    4) Try up to 3 repair passes; return None if all fail.
+    """
+    import re
+
     if not isinstance(text, str):
         return None
-    text = text.strip()
+
+    def _clean_base(s: str) -> str:
+        # Remove code fences and non-printing characters
+        s = s.replace("```json", "").replace("```", "")
+        s = s.replace("\ufeff", "")  # BOM
+        s = s.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
+        s = s.replace("\xa0", " ")
+        # Normalize curly quotes to straight quotes
+        s = s.replace("\u201c", '"').replace("\u201d", '"').replace("\u201e", '"').replace("\u201f", '"')
+        s = s.replace("\u2018", "'").replace("\u2019", "'")
+        return s
+
+    def _find_first_object(s: str) -> str | None:
+        in_str = False
+        esc = False
+        depth = 0
+        start = -1
+        for i, ch in enumerate(s):
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == '{':
+                    if depth == 0:
+                        start = i
+                    depth += 1
+                elif ch == '}':
+                    if depth > 0:
+                        depth -= 1
+                        if depth == 0 and start != -1:
+                            return s[start:i+1]
+        return None
+
+    def _remove_trailing_commas(s: str) -> str:
+        return re.sub(r',\s*([}\]])', r'\1', s)
+
+    def _remove_standalone_number_lines(s: str) -> str:
+        # Remove lines that contain only a number (int/float) possibly followed by a comma.
+        return re.sub(r'^[\t ]*[+-]?(?:\d+(?:\.\d+)?|\.\d+)[\t ]*,?[\t ]*\r?\n', '', s, flags=re.MULTILINE)
+
+    def _insert_missing_commas_between_members(s: str) -> str:
+        # If a line ends a value without a comma and the next non-space starts a quoted key, insert a comma.
+        # Heuristic: look for patterns like "}\n\s*\"" or number/true/false/null closing a member.
+        s = re.sub(r'(\}|\]|\d|true|false|null)\s*\n\s*(\")', r'\1,\n\2', s)
+        return s
+
+    # Try direct parse first
+    txt = _clean_base(text.strip())
     try:
-        # Try straight parse first
-        return json.loads(text)
+        return json.loads(txt)
     except Exception:
         pass
-    # Fallback: find outermost { ... }
-    start = text.find('{')
-    end = text.rfind('}')
-    if start != -1 and end > start:
-        try:
-            return json.loads(text[start:end+1])
-        except Exception:
-            return None
-    return None
+
+    # Extract first object region
+    obj_region = _find_first_object(txt)
+    if obj_region is None:
+        return None
+
+    candidates = [obj_region]
+
+    # Progressive repairs
+    for i in range(3):
+        cur = candidates[-1]
+        for fixer in (_remove_trailing_commas, _remove_standalone_number_lines, _insert_missing_commas_between_members):
+            fixed = fixer(cur)
+            try:
+                return json.loads(fixed)
+            except Exception:
+                cur = fixed
+        candidates.append(cur)
+
+    # Final attempt without repairs using the region only
+    try:
+        return json.loads(obj_region)
+    except Exception:
+        return None
 
 
 def _to_jsonable(obj):
@@ -349,6 +431,9 @@ def _sanitize_stock_output(ctx: dict, prompt: str, parsed: dict) -> dict:
         if "newsSentiment" in sd_raw:
             ns_obj = sd_raw["newsSentiment"]
             ns_score = ns_obj.get("score") if isinstance(ns_obj, dict) else None
+        elif "newsSent" in sd_raw:  # Common LLM mistake - truncated key
+            news_obj = sd_raw["newsSent"]
+            ns_score = news_obj.get("score") if isinstance(news_obj, dict) else news_obj
         elif "news" in sd_raw:  # Common mistake
             news_obj = sd_raw["news"]
             ns_score = news_obj.get("score") if isinstance(news_obj, dict) else news_obj
@@ -531,10 +616,24 @@ def _sanitize_stock_output(ctx: dict, prompt: str, parsed: dict) -> dict:
         pass
 
     # FINAL STEP: Rebuild sentimentDial with ONLY the correct three keys, no extras
+    def _to_int_score_0_100(v, fallback=50):
+        """Convert to integer score 0-100, with fallback for None values."""
+        try:
+            if v is None:
+                return fallback
+            iv = int(round(float(v)))
+            if iv < 0:
+                iv = 0
+            if iv > 100:
+                iv = 100
+            return iv
+        except Exception:
+            return fallback
+
     out["sentimentDial"] = {
-        "newsSentiment": {"score": ns.get("score")},
-        "socialSentiment": {"score": ss.get("score")},
-        "analystSentiment": {"score": an.get("score")}
+        "newsSentiment": {"score": _to_int_score_0_100(ns.get("score"), fallback=50)},
+        "socialSentiment": {"score": _to_int_score_0_100(ss.get("score"), fallback=50)},
+        "analystSentiment": {"score": _to_int_score_0_100(an.get("score"), fallback=50)}
     }
     print(f"[stock] _sanitize: Final sentimentDial = {out['sentimentDial']}")
 
@@ -614,6 +713,62 @@ def make_llm_openrouter(system_msg_override: str | None = None):
         return ""  # Should not be reached
 
     return _call
+
+
+def _validate_required_fields(parsed: dict, ctx: dict) -> tuple[bool, list[str]]:
+    """Validate that required fields are present and not empty in the LLM output.
+
+    Args:
+        parsed: The parsed JSON output from the LLM
+        ctx: The analysis context containing input data (news_items, etc.)
+
+    Returns:
+        (is_valid, missing_fields): True if all required fields are present and non-empty,
+                                    False otherwise with a list of missing/empty field names
+    """
+    missing = []
+
+    # Check aiDailyBrief (must exist and not be empty string)
+    ai_brief = parsed.get("aiDailyBrief")
+    if not ai_brief or not isinstance(ai_brief, str) or not ai_brief.strip():
+        missing.append("aiDailyBrief")
+
+    # Check sentimentDial structure
+    sentiment_dial = parsed.get("sentimentDial")
+    if not isinstance(sentiment_dial, dict):
+        missing.append("sentimentDial")
+    else:
+        # Check newsSentiment
+        news_sent = sentiment_dial.get("newsSentiment")
+        if not isinstance(news_sent, dict) or "score" not in news_sent or news_sent.get("score") is None:
+            missing.append("sentimentDial.newsSentiment")
+
+        # Check socialSentiment
+        social_sent = sentiment_dial.get("socialSentiment")
+        if not isinstance(social_sent, dict) or "score" not in social_sent or social_sent.get("score") is None:
+            missing.append("sentimentDial.socialSentiment")
+
+        # Check analystSentiment
+        analyst_sent = sentiment_dial.get("analystSentiment")
+        if not isinstance(analyst_sent, dict) or "score" not in analyst_sent or analyst_sent.get("score") is None:
+            missing.append("sentimentDial.analystSentiment")
+
+    # Check aiSummary.newsSummary with smart validation
+    ai_summary = parsed.get("aiSummary")
+    if not isinstance(ai_summary, dict):
+        missing.append("aiSummary")
+    else:
+        news_summary = ai_summary.get("newsSummary")
+        if news_summary is None:
+            missing.append("aiSummary.newsSummary")
+        else:
+            # Smart validation: if news_items were provided but newsSummary is empty, it's invalid
+            news_items = ctx.get("news_items") or []
+            if isinstance(news_summary, list) and len(news_summary) == 0 and len(news_items) > 0:
+                missing.append("aiSummary.newsSummary (empty but {} news items provided)".format(len(news_items)))
+
+    is_valid = len(missing) == 0
+    return is_valid, missing
 
 
 # --- Flask Application ---
@@ -810,14 +965,48 @@ def stock_analysis():
 
         print("[stock] Initializing OpenRouter LLM client...")
         llm = make_llm_openrouter()
-        print("[stock] Calling OpenRouter with prompt...")
-        raw_result = llm(prompt)
-        print(f"[stock] OpenRouter call completed, raw_result_len={len(raw_result) if isinstance(raw_result, str) else 'n/a'}")
 
-        parsed = _extract_json_object(raw_result)
+        # Retry loop for handling non-JSON responses and missing required fields
+        max_retries = 2  # Total of 3 attempts (initial + 2 retries)
+        parsed = None
+        raw_result = None
+        retry_reason = None
+
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                retry_delay = (2 ** (attempt - 1)) + random.uniform(0.1, 0.5)
+                print(f"[stock] Retry attempt {attempt}/{max_retries} after {retry_delay:.2f}s delay due to {retry_reason}")
+                time.sleep(retry_delay)
+
+            print(f"[stock] Calling OpenRouter with prompt (attempt {attempt + 1}/{max_retries + 1})...")
+            raw_result = llm(prompt)
+            print(f"[stock] OpenRouter call completed, raw_result_len={len(raw_result) if isinstance(raw_result, str) else 'n/a'}")
+
+            parsed = _extract_json_object(raw_result)
+            if parsed is None:
+                print(f"[stock] Failed to extract JSON object from LLM response (attempt {attempt + 1}/{max_retries + 1})")
+                retry_reason = "JSON parsing failure"
+                if attempt < max_retries:
+                    print(f"[stock] Will retry with same prompt...")
+                continue
+
+            print(f"[stock] Successfully extracted JSON object on attempt {attempt + 1}")
+
+            # Validate required fields
+            is_valid, missing_fields = _validate_required_fields(parsed, ctx)
+            if is_valid:
+                print(f"[stock] All required fields present and valid on attempt {attempt + 1}")
+                break
+            else:
+                print(f"[stock] Required fields missing or empty on attempt {attempt + 1}: {', '.join(missing_fields)}")
+                retry_reason = f"missing fields: {', '.join(missing_fields)}"
+                if attempt < max_retries:
+                    print(f"[stock] Will retry with same prompt...")
+                    parsed = None  # Reset to trigger retry
+
         if parsed is None:
-            print("[stock] Failed to extract JSON object from LLM response")
-            return jsonify({"error": "LLM did not return a valid JSON object.", "raw": raw_result}), 502
+            print(f"[stock] Failed to get valid response after {max_retries + 1} attempts")
+            return jsonify({"error": "LLM did not return a valid JSON object with all required fields after retries.", "raw": raw_result, "attempts": max_retries + 1, "last_reason": retry_reason}), 502
 
         sanitized = _sanitize_stock_output(ctx, prompt, parsed)
         print("[stock] Sanitization complete; responding with JSON")

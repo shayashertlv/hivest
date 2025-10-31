@@ -127,6 +127,12 @@ def analyze_stock(si: StockInput, options: Optional[AnalysisOptions] = None) -> 
             upcoming.append({"symbol": symbol, "type": "earnings", "date": nxt, "note": "Next earnings date (FMP)"})
 
     last_price = closes[-1] if closes else None
+    prev_close = closes[-2] if len(closes) >= 2 else None
+    daily_change = None
+    daily_change_pct = None
+    if last_price is not None and prev_close is not None and prev_close != 0:
+        daily_change = last_price - prev_close
+        daily_change_pct = (last_price / prev_close - 1.0) * 100.0  # as percentage
 
     cm = ComputedMetrics(
         cum_return=cum_ret,
@@ -143,6 +149,9 @@ def analyze_stock(si: StockInput, options: Optional[AnalysisOptions] = None) -> 
         pct_from_52w_high=pct_hi,
         pct_from_52w_low=pct_lo,
         last_price=last_price,
+        prev_close=prev_close,
+        daily_change=daily_change,
+        daily_change_pct=daily_change_pct,
         instrument_type=inst_type,
         fundamentals=fund or {},
         etf_profile=etf_prof or {},
